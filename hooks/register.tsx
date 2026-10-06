@@ -116,24 +116,38 @@ const gitBranch = async ($: EngineInterface): Promise<string | undefined> => {
   return sha.exitCode === 0 && sha.stdout.trim() !== '' ? `detached ${sha.stdout.trim()}` : undefined
 }
 
+/** The categories the bar draws; deferred ones and any kind the engine adds later are left out. */
+const SEGMENT_KINDS = new Set<string>(['used', 'free', 'buffer'] satisfies Segment['kind'][])
+
+const toLimits = (limits: readonly Limit[]): Limit[] =>
+  limits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
+
+/** Everything: the context breakdown, the limits, the cost and the branch. */
 const measure = async ($: EngineInterface) => {
   const [usage, branch] = await Promise.all([
     $.session.usage({ breakdown: 'summary' }),
     gitBranch($).catch(() => undefined),
   ])
   const b = usage.context.breakdown
-  const segments: Segment[] = (b?.categories ?? [])
-    .flatMap(c => (c.kind === 'deferred' ? [] : [{ name: c.name, color: c.color, tokens: c.tokens, kind: c.kind }]))
+  const segments: Segment[] = (b?.categories ?? []).flatMap(c =>
+    SEGMENT_KINDS.has(c.kind) ? [{ name: c.name, color: c.color, tokens: c.tokens, kind: c.kind as Segment['kind'] }] : [],
+  )
   const next: Snapshot = {
     segments,
     totalTokens: b?.totalTokens ?? usage.context.tokens ?? 0,
     maxTokens: b?.rawMaxTokens ?? usage.context.window,
     percent: b?.percentage ?? usage.context.percent ?? 0,
-    limits: usage.rateLimits.map((l): Limit => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
+    limits: toLimits(usage.rateLimits),
     usd: usage.cost?.usd,
     branch,
   }
   await update($, snapshot, () => next)
+}
+
+/** The branch alone, for when it may have moved without the context moving. */
+const refreshBranch = async ($: EngineInterface) => {
+  const branch = await gitBranch($).catch(() => undefined)
+  await update($, snapshot, s => (s === null ? s : { ...s, branch }))
 }
 
 export const register: Register = on => {
@@ -142,19 +156,28 @@ export const register: Register = on => {
     await $.command.register({ name: 'usage-bar', description: 'Toggle the context and usage bar above the prompt' })
     const stored = await $.store.get(STORE_KEY)
     if (typeof stored === 'boolean') await update($, isVisible, () => stored)
-    await measure($).catch(() => undefined)
+    if (await read($, isVisible)) await measure($).catch(() => undefined)
     return started
   })
 
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
-    if (await read($, isVisible)) await measure($).catch(() => undefined)
+    if (!(await read($, isVisible))) return result
+    // Only a moved context needs the breakdown and git again; limits and cost come with the event.
+    if (e.changed.includes('context') || (await read($, snapshot)) === null) await measure($).catch(() => undefined)
+    else await update($, snapshot, s => (s === null ? s : { ...s, limits: toLimits(e.rateLimits), usd: e.cost?.usd }))
     return result
   })
 
+  // A checkout in a `!` command or another terminal shows at the next prompt rather than after its turn.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    if (await read($, isVisible)) await refreshBranch($).catch(() => undefined)
+    return result
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'usage-bar' }, async $ => {
-    const now = !(await read($, isVisible))
-    await update($, isVisible, () => now)
+    const now = await update($, isVisible, v => !v)
     await $.store.set(STORE_KEY, now)
     if (now) await measure($).catch(() => undefined)
     return { text: now ? 'Usage bar shown.' : 'Usage bar hidden.' }
@@ -184,7 +207,7 @@ export const register: Register = on => {
           {snap.segments.map((s, i) => {
             const n = widths[i] ?? 0
             return n > 0 ? (
-              <Text color={s.color} dimColor={s.kind !== 'used'}>
+              <Text key={s.name} color={s.color} dimColor={s.kind !== 'used'}>
                 {(s.kind === 'used' ? '█' : s.kind === 'buffer' ? '▒' : '░').repeat(n)}
               </Text>
             ) : null
@@ -196,7 +219,7 @@ export const register: Register = on => {
         <Text wrap="truncate">
           {' '.repeat(LABEL)}
           {used.map(s => (
-            <Text>
+            <Text key={s.name}>
               <Text color={s.color}>■</Text>
               <Text dimColor>{` ${s.name} ${kTokens(s.tokens)}  `}</Text>
             </Text>
@@ -213,7 +236,7 @@ export const register: Register = on => {
           const { number, resets } = limitParts(l)
           const alert = usageNumberColor(l.percentUsed)
           return (
-            <Box>
+            <Box key={l.kind}>
               <Text bold>{label}</Text>
               <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
               <Text dimColor>{'░'.repeat(width - fill)}</Text>
@@ -227,7 +250,8 @@ export const register: Register = on => {
           )
         })}
         {snap.limits.length === 0 && snap.usd !== undefined && (
-          <Text dimColor>{`${'Cost'.padEnd(LABEL)}$${snap.usd.toFixed(2)} this session (no subscription limits reported)`}</Text>
+          // Also drawn on a subscription until its first response reports the limits, so it claims nothing about them.
+          <Text dimColor wrap="truncate-end">{`${'Cost'.padEnd(LABEL)}$${snap.usd.toFixed(2)} this session`}</Text>
         )}
       </Box>
     )

@@ -92,14 +92,79 @@ describe('usageNumberColor', () => {
   })
 })
 
+type Dollar = Parameters<Parameters<typeof test>[1]>[0]
+type Git = Record<string, { exitCode: number; stdout: string }>
+type Node = { type?: string; props?: object; children?: (Node | string)[] }
+
+/**
+ * Fakes the store, git, the usage figures and the engine's own band. `calls` logs each usage read
+ * (`usage`) and git command; `usage` and `git` are swapped in place for the next measurement.
+ */
+const fakes = (on: On, init: { usage?: unknown; git?: Git; store?: Record<string, unknown> } = {}) => {
+  const f = { usage: init.usage ?? USAGE, git: init.git ?? {}, store: new Map(Object.entries(init.store ?? {})), calls: [] as string[] }
+  on('store.get', (_$, e) => ({ value: f.store.get(e.key) }) as never)
+  on('store.set', (_$, e) => (f.store.set(e.key, e.value), { value: undefined }) as never)
+  on('session.usage', () => (f.calls.push('usage'), { value: f.usage }) as never)
+  on('process.run', (_$, e) => {
+    const argv = e.argv.join(' ')
+    f.calls.push(argv)
+    const a = f.git[argv] ?? { exitCode: 128, stdout: '' }
+    return { value: { ...a, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('ui.render', ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
+  return f
+}
+
+/** Hides then shows the band, which measures, and mounts it. */
+const mount = async ($: Dollar, bodyColumns = 100, surface: 'terminal' | 'desktop' = 'terminal') => {
+  await $.command.run({ command: 'usage-bar' } as never) // hide
+  await $.command.run({ command: 'usage-bar' } as never) // show, measures
+  return $.ui.mount({ plugin: 'usage-bar', surface, component: 'AbovePrompt', props: { ...BAND, bodyColumns } as never })
+}
+
+/** The drawing's text as the terminal shows it, pieces joined in order. */
+const plain = (n: Node | string): string => (typeof n === 'string' ? n : (n.children ?? []).map(plain).join(''))
+
+/** Every Text holding a single string, with its props. */
+const texts = (root: Node) => {
+  const out: { text: string; props?: object }[] = []
+  const walk = (n: Node) => {
+    const only = n.children?.length === 1 && typeof n.children[0] === 'string' ? n.children[0] : undefined
+    if (n.type === 'Text' && only !== undefined) out.push({ text: only, props: n.props })
+    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
+  }
+  walk(root)
+  return out
+}
+
+/** Each Box row that holds a bar: the bar's glyphs and the row's whole text. */
+const barRows = (root: Node) => {
+  const out: { bar: string; row: string }[] = []
+  const walk = (n: Node) => {
+    if (n.type === 'Box') {
+      const parts = (n.children ?? []).map(plain)
+      const bar = parts.filter(t => /^[█░▒]+$/.test(t)).join('')
+      if (bar !== '') out.push({ bar, row: parts.join('') })
+    }
+    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
+  }
+  walk(root)
+  return out
+}
+
+/** Shows the band over these figures and returns its drawing. */
+const drawn = async ($: Dollar, on: On, usage: unknown = USAGE, bodyColumns = 100) => {
+  fakes(on, { usage })
+  return (await (await mount($, bodyColumns)).drawn()) as Node
+}
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`draws context and limits, /usage-bar hides it (${surface})`, async ($, on) => {
-    fakeStore(on)
-    on('session.usage', () => ({ value: USAGE }) as never)
-    engineBand(on)
-    await $.command.run({ command: 'usage-bar' } as never) // hide
-    await $.command.run({ command: 'usage-bar' } as never) // show, measures
-    const ui = await $.ui.mount({ plugin: 'usage-bar', surface, component: 'AbovePrompt', props: BAND as never })
+    fakes(on)
+    const ui = await mount($, 100, surface)
     const text = JSON.stringify(await ui.drawn())
     expect(text).toContain('Context')
     expect(text).toContain('Messages 40k')
@@ -112,110 +177,82 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-const fakeGit = (on: On, answers: Record<string, { exitCode: number; stdout: string }>) =>
-  on('process.run', (_$, e) => {
-    const a = answers[e.argv.join(' ')] ?? { exitCode: 128, stdout: '' }
-    return { value: { ...a, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
-  })
-
-const drawnAfterMeasure = async ($: Parameters<Parameters<typeof test>[1]>[0]) => {
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  return JSON.stringify(await ui.drawn())
-}
+test('a category of a kind the bar does not know is left out', async ($, on) => {
+  const categories = [...USAGE.context.breakdown.categories, { name: 'Future thing', tokens: 5_000, color: 'x', isDeferred: false, kind: 'future' }]
+  const tree = await drawn($, on, { ...USAGE, context: { ...USAGE.context, breakdown: { ...USAGE.context.breakdown, categories } } })
+  expect(plain(tree)).not.toContain('Future thing')
+  expect(texts(tree).filter(t => (t.props as { color?: string } | undefined)?.color === 'x')).toEqual([])
+})
 
 test('shows the current git branch', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({ value: USAGE }) as never)
-  fakeGit(on, { 'git branch --show-current': { exitCode: 0, stdout: 'feature/301-thing\n' } })
-  engineBand(on)
-  const text = await drawnAfterMeasure($)
+  fakes(on, { git: { 'git branch --show-current': { exitCode: 0, stdout: 'feature/301-thing\n' } } })
+  const text = JSON.stringify(await (await mount($)).drawn())
   expect(text).toContain('Branch')
   expect(text).toContain('feature/301-thing')
 })
 
 test('a detached HEAD shows its short sha', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({ value: USAGE }) as never)
-  fakeGit(on, {
-    'git branch --show-current': { exitCode: 0, stdout: '\n' },
-    'git rev-parse --short HEAD': { exitCode: 0, stdout: 'df04d8e\n' },
+  fakes(on, {
+    git: {
+      'git branch --show-current': { exitCode: 0, stdout: '\n' },
+      'git rev-parse --short HEAD': { exitCode: 0, stdout: 'df04d8e\n' },
+    },
   })
-  engineBand(on)
-  expect(await drawnAfterMeasure($)).toContain('detached df04d8e')
+  expect(JSON.stringify(await (await mount($)).drawn())).toContain('detached df04d8e')
 })
 
 test('outside a git repository there is no branch row', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({ value: USAGE }) as never)
-  fakeGit(on, {})
-  engineBand(on)
-  const text = await drawnAfterMeasure($)
+  const text = JSON.stringify(await drawn($, on))
   expect(text).toContain('Context')
   expect(text).not.toContain('Branch')
 })
 
-const fakeStore = (on: On, entries: Record<string, unknown> = {}) => {
-  const map = new Map(Object.entries(entries))
-  on('store.get', (_$, e) => ({ value: map.get(e.key) }) as never)
-  on('store.set', (_$, e) => (map.set(e.key, e.value), { value: undefined }) as never)
-  return map
-}
+test('a prompt picks up a branch changed outside the turn', async ($, on) => {
+  const f = fakes(on, { git: { 'git branch --show-current': { exitCode: 0, stdout: 'main\n' } } })
+  on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+  const ui = await mount($)
+  expect(plain((await ui.drawn()) as Node)).toContain('main')
+  f.git = { 'git branch --show-current': { exitCode: 0, stdout: 'feature/next\n' } }
+  await $.prompt.submit({ text: 'hi' } as never)
+  expect(plain((await ui.drawn()) as Node)).toContain('feature/next')
+})
 
-const engineBand = (on: On) =>
-  on('ui.render', ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box key="engine" />
+describe('session.measure', () => {
+  const measured = (on: On) => on('session.measure', (_$, e) => ({ changed: e.changed }) as never)
+
+  test('a limits-only measurement redraws the limits without the breakdown or git', async ($, on) => {
+    const f = fakes(on)
+    measured(on)
+    const ui = await mount($)
+    f.calls.length = 0
+    await $.session.measure({
+      context: USAGE.context, rateLimits: [{ kind: 'five_hour', percentUsed: 81 }], cost: { usd: 2 }, changed: ['rateLimits'],
+    } as never)
+    expect(f.calls).toEqual([])
+    expect(plain((await ui.drawn()) as Node)).toContain('81%')
   })
 
-type Node = { type?: string; children?: (Node | string)[] }
-/** The drawing's text as the terminal shows it, pieces joined in order. */
-const plain = (n: Node | string): string => (typeof n === 'string' ? n : (n.children ?? []).map(plain).join(''))
-/** Each Box row's bar: its children that are only bar glyphs, joined. */
-const bars = (node: Node): string[] => {
-  const out: string[] = []
-  const walk = (n: Node) => {
-    if (n.type === 'Box') {
-      const bar = (n.children ?? [])
-        .map(c => (typeof c === 'object' && c.type === 'Text' ? (c.children ?? []).join('') : ''))
-        .filter(t => /^[█░▒]+$/.test(t))
-        .join('')
-      if (bar !== '') out.push(bar)
-    }
-    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
-  }
-  walk(node)
-  return out
-}
+  test('a moved context measures everything again', async ($, on) => {
+    const f = fakes(on)
+    measured(on)
+    const ui = await mount($)
+    f.calls.length = 0
+    f.usage = { ...USAGE, context: { ...USAGE.context, breakdown: { ...USAGE.context.breakdown, percentage: 31, totalTokens: 62_000 } } }
+    await $.session.measure({ context: USAGE.context, rateLimits: USAGE.rateLimits, cost: USAGE.cost, changed: ['context'] } as never)
+    expect(f.calls).toContain('usage')
+    expect(f.calls).toContain('git branch --show-current')
+    expect(plain((await ui.drawn()) as Node)).toContain('31% 62k/200k')
+  })
 
-/** Registers the fakes, then draws the bar rows for any figures and width: each row's bar and whole text. */
-const barRows = (on: On) => {
-  let usage: unknown = USAGE
-  fakeStore(on)
-  on('session.usage', () => ({ value: usage }) as never)
-  engineBand(on)
-  return async ($: Parameters<Parameters<typeof test>[1]>[0], figures: unknown, bodyColumns: number) => {
-    usage = figures
+  test('a hidden band is not measured', async ($, on) => {
+    const f = fakes(on)
+    measured(on)
     await $.command.run({ command: 'usage-bar' } as never) // hide
-    await $.command.run({ command: 'usage-bar' } as never) // show, measures
-    const ui = await $.ui.mount({
-      plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns } as never,
-    })
-    const text = (n: Node | string): string => (typeof n === 'string' ? n : (n.children ?? []).map(text).join(''))
-    const rows: { bar: string; row: string }[] = []
-    const walk = (n: Node) => {
-      if (n.type === 'Box') {
-        const parts = (n.children ?? []).map(text)
-        const bar = parts.filter(t => /^[█░▒]+$/.test(t)).join('')
-        if (bar !== '') rows.push({ bar, row: parts.join('') })
-      }
-      for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
-    }
-    walk((await ui.drawn()) as Node)
-    return rows
-  }
-}
+    f.calls.length = 0
+    await $.session.measure({ context: USAGE.context, rateLimits: USAGE.rateLimits, cost: USAGE.cost, changed: ['context'] } as never)
+    expect(f.calls).toEqual([])
+  })
+})
 
 const withFigures = (percent: number, tokens: number, limits: unknown[]) => ({
   ...USAGE,
@@ -228,21 +265,31 @@ const LONG = withFigures(100, 1_000_000, [
   { kind: 'seven_day', percentUsed: 100, resetsAt: '2026-10-09T08:00:00Z' },
 ])
 
+/** Draws the bar rows for any figures and width, the figures swapped between draws. */
+const rowsAt = (on: On) => {
+  const f = fakes(on)
+  return async ($: Dollar, figures: unknown, bodyColumns: number) => {
+    f.usage = figures
+    return barRows((await (await mount($, bodyColumns)).drawn()) as Node)
+  }
+}
+
 test('the context and limit bars are the same width', async ($, on) => {
-  const rows = await barRows(on)($, withFigures(30, 60_000, [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: '2026-10-06T14:00:00Z' }, { kind: 'seven_day', percentUsed: 7 }]), 100)
+  const figures = withFigures(30, 60_000, [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: '2026-10-06T14:00:00Z' }, { kind: 'seven_day', percentUsed: 7 }])
+  const rows = barRows(await drawn($, on, figures))
   expect(rows.length).toBe(3)
   expect(new Set(rows.map(r => r.bar.length)).size).toBe(1)
 })
 
 test('the bars keep their width when the figures after them grow or shrink', async ($, on) => {
-  const draw = barRows(on)
+  const draw = rowsAt(on)
   const short = await draw($, SHORT, 100)
   const long = await draw($, LONG, 100)
   expect(long.map(r => r.bar.length)).toEqual(short.map(r => r.bar.length))
 })
 
 test('the bars follow the terminal width', async ($, on) => {
-  const draw = barRows(on)
+  const draw = rowsAt(on)
   const wide = await draw($, SHORT, 120)
   const narrow = await draw($, SHORT, 60)
   expect((wide[0]?.bar.length ?? 0) - (narrow[0]?.bar.length ?? 0)).toBe(60)
@@ -250,94 +297,54 @@ test('the bars follow the terminal width', async ($, on) => {
 
 for (const columns of [100, 30]) {
   test(`the longest figures still fit in ${columns} columns`, async ($, on) => {
-    for (const { row } of await barRows(on)($, LONG, columns)) expect(row.length).toBeLessThanOrEqual(columns)
+    for (const { row } of barRows(await drawn($, on, LONG, columns))) expect(row.length).toBeLessThanOrEqual(columns)
   })
 }
 
-test('the 7d fill is faded, never greyed by dimColor, the 5h fill is vivid', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({
-    value: { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 90 }, { kind: 'seven_day', percentUsed: 20 }] },
-  }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const fills: { color?: string; dimColor?: boolean }[] = []
-  const walk = (n: Node & { props?: { color?: string; dimColor?: boolean } }) => {
-    const only = n.children?.length === 1 && typeof n.children[0] === 'string' ? n.children[0] : ''
-    if (n.type === 'Text' && /^█+$/.test(only) && n.props?.color?.startsWith('#')) fills.push(n.props)
-    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
-  }
-  walk((await ui.drawn()) as Node)
-  expect(fills).toEqual([
-    { color: usageColor(90) },
-    { color: usageColor(20, true) },
-  ])
+test('without limits the cost row states the cost alone and truncates', async ($, on) => {
+  const cost = texts(await drawn($, on, { ...USAGE, rateLimits: [] }, 30)).find(t => t.text.startsWith('Cost'))
+  expect(cost).toEqual({ text: 'Cost    $1.23 this session', props: { dimColor: true, wrap: 'truncate-end' } })
 })
+
+test('the 7d fill is faded, never greyed by dimColor, the 5h fill is vivid', async ($, on) => {
+  const tree = await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 90 }, { kind: 'seven_day', percentUsed: 20 }] })
+  const fills = texts(tree)
+    .filter(t => /^█+$/.test(t.text) && (t.props as { color?: string } | undefined)?.color?.startsWith('#'))
+    .map(t => t.props)
+  expect(fills).toEqual([{ color: usageColor(90) }, { color: usageColor(20, true) }])
+})
+
+const hhmm = (at: Date) => `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+const weekday = (at: Date) => new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(at)
 
 test('a reset shows its local day and time, without the UTC Z', async ($, on) => {
   const resetsAt = '2026-10-08T22:05:00Z'
-  const at = new Date(resetsAt)
-  const day = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(at)
-  const local = `${day} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-  fakeStore(on)
-  on('session.usage', () => ({ value: { ...USAGE, rateLimits: [{ kind: 'seven_day', percentUsed: 42.5, resetsAt }] } }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const text = plain((await ui.drawn()) as Node)
+  const local = `${weekday(new Date(resetsAt))} ${hhmm(new Date(resetsAt))}`
+  const text = plain(await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'seven_day', percentUsed: 42.5, resetsAt }] }))
   expect(text).toContain(`43% resets ${local}`)
   expect(text).not.toContain(`${local}Z`)
 })
 
 test('the 5h reset shows its local time without the day', async ($, on) => {
   const resetsAt = '2026-10-08T22:05:00Z'
-  const at = new Date(resetsAt)
-  const local = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-  fakeStore(on)
-  on('session.usage', () => ({ value: { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 42.5, resetsAt }] } }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const text = plain((await ui.drawn()) as Node)
-  expect(text).toContain(`43% resets ${local}`)
-  expect(text).not.toContain(`resets ${new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(at)}`)
+  const text = plain(await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 42.5, resetsAt }] }))
+  expect(text).toContain(`43% resets ${hhmm(new Date(resetsAt))}`)
+  expect(text).not.toContain(`resets ${weekday(new Date(resetsAt))}`)
 })
 
 test('an unreadable reset time is left out rather than drawn as NaN', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({ value: { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: 'soon' }] } }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const text = JSON.stringify(await ui.drawn())
+  const text = plain(await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: 'soon' }] }))
   expect(text).toContain('43%')
   expect(text).not.toContain('resets')
 })
 
 test('a limit number past 50% stands out in its colour, the reset time stays dim', async ($, on) => {
-  fakeStore(on)
-  on('session.usage', () => ({
-    value: { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 91, resetsAt: '2026-10-06T14:05:00Z' }, { kind: 'seven_day', percentUsed: 20 }] },
-  }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const texts: { text: string; props?: object }[] = []
-  const walk = (n: Node & { props?: object }) => {
-    const only = n.children?.length === 1 && typeof n.children[0] === 'string' ? n.children[0] : undefined
-    if (n.type === 'Text' && only !== undefined) texts.push({ text: only, props: n.props })
-    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
-  }
-  walk((await ui.drawn()) as Node)
-  expect(texts.find(t => t.text.trim() === '91%')?.props).toEqual({ color: usageColor(100) })
-  expect(texts.find(t => t.text.trim() === '20%')?.props).toEqual({ dimColor: true })
-  expect(texts.find(t => t.text.includes('resets'))?.props).toEqual({ dimColor: true, wrap: 'truncate-end' })
+  const all = texts(await drawn($, on, {
+    ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 91, resetsAt: '2026-10-06T14:05:00Z' }, { kind: 'seven_day', percentUsed: 20 }],
+  }))
+  expect(all.find(t => t.text.trim() === '91%')?.props).toEqual({ color: usageColor(100) })
+  expect(all.find(t => t.text.trim() === '20%')?.props).toEqual({ dimColor: true })
+  expect(all.find(t => t.text.includes('resets'))?.props).toEqual({ dimColor: true, wrap: 'truncate-end' })
 })
 
 const atContext = (totalTokens: number) => ({
@@ -349,22 +356,9 @@ const atContext = (totalTokens: number) => ({
   },
 })
 
-const contextDrawing = async ($: Parameters<Parameters<typeof test>[1]>[0], on: On, totalTokens: number) => {
-  fakeStore(on)
-  on('session.usage', () => ({ value: atContext(totalTokens) }) as never)
-  engineBand(on)
-  await $.command.run({ command: 'usage-bar' } as never) // hide
-  await $.command.run({ command: 'usage-bar' } as never) // show, measures
-  const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
-  const drawn = (await ui.drawn()) as Node
-  const texts: { text: string; props?: object }[] = []
-  const walk = (n: Node & { props?: object }) => {
-    const only = n.children?.length === 1 && typeof n.children[0] === 'string' ? n.children[0] : undefined
-    if (n.type === 'Text' && only !== undefined) texts.push({ text: only, props: n.props })
-    for (const c of n.children ?? []) if (typeof c === 'object') walk(c)
-  }
-  walk(drawn)
-  return { text: plain(drawn), tail: texts.find(t => /^ \d+% .+\/.+$/.test(t.text)) }
+const contextDrawing = async ($: Dollar, on: On, totalTokens: number) => {
+  const tree = await drawn($, on, atContext(totalTokens))
+  return { text: plain(tree), tail: texts(tree).find(t => /^ \d+% .+\/.+$/.test(t.text)) }
 }
 
 test('below 250k the context numbers stay dim and nothing suggests /compact', async ($, on) => {
@@ -380,20 +374,18 @@ test('from 250k the context numbers turn orange and /compact is suggested', asyn
 })
 
 test('hiding is written to the store', async ($, on) => {
-  const store = fakeStore(on)
-  on('session.usage', () => ({ value: USAGE }) as never)
+  const f = fakes(on)
   await $.command.run({ command: 'usage-bar' } as never) // hide
-  expect(store.get('isVisible')).toBe(false)
+  expect(f.store.get('isVisible')).toBe(false)
 })
 
 for (const stored of [false, true]) {
-  test(`a new session reads isVisible=${stored} from the store`, async ($, on) => {
-    fakeStore(on, { isVisible: stored })
-    on('session.usage', () => ({ value: USAGE }) as never)
+  test(`a new session reads isVisible=${stored} from the store, and measures only when shown`, async ($, on) => {
+    const f = fakes(on, { store: { isVisible: stored } })
     on('session.start', () => ({ cwd: '/' }) as never)
     on('command.register', () => ({ value: undefined }) as never)
-    engineBand(on)
     await $.session.start({ cwd: '/' } as never)
+    expect(f.calls.includes('usage')).toBe(stored)
     const ui = await $.ui.mount({ plugin: 'usage-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND as never })
     expect(JSON.stringify(await ui.drawn()).includes('Context')).toBe(stored)
   })
