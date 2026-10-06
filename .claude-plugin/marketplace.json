@@ -1,0 +1,6 @@
+{
+  "name": "dixdel-ai",
+  "owner": { "name": "Didier Delhaye" },
+  "description": "Claude Code mods by Didier Delhaye",
+  "plugins": [{ "name": "usage-bar", "source": "./" }]
+}
