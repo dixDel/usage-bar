@@ -1,0 +1,235 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { Limit, Segment, Snapshot } from '../types'
+
+const snapshot = atom({ plugin: 'usage-bar', key: 'snapshot' } as const, null)
+const isVisible = atom({ plugin: 'usage-bar', key: 'isVisible' } as const, true)
+
+// The /usage-bar choice, kept across sessions.
+const STORE_KEY = 'isVisible'
+const LABEL = 8 // "Context " / "5h      " column
+const LIMIT_NAMES: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
+
+export const kTokens = (n: number) =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
+
+const contextTail = (percent: number, total: number, max: number) =>
+  ` ${Math.round(percent)}% ${kTokens(total)}/${kTokens(max)}`
+// Fixed names rather than the locale's, so the day is always three letters wide.
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// Windows that always reset within the day ahead, where the time alone is unambiguous.
+const TIME_ONLY_LIMITS = new Set(['five_hour'])
+
+/** An ISO 8601 instant as local "Ddd HH:MM" (or "HH:MM"), 24-hour, in the host's time zone; undefined when unreadable. */
+const localTime = (iso: string, hasDay: boolean): string | undefined => {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return undefined
+  const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  return hasDay ? `${DAYS[at.getDay()]} ${hhmm}` : hhmm
+}
+/** A limit's tail in its two parts: the number, which may take a colour, and the reset time, always dim. */
+const limitParts = (l: Limit) => {
+  const resets = l.resetsAt === undefined ? undefined : localTime(l.resetsAt, !TIME_ONLY_LIMITS.has(l.kind))
+  return { number: ` ${Math.round(l.percentUsed)}%`, resets: resets ? ` resets ${resets}` : '' }
+}
+const limitTail = (l: Limit) => {
+  const { number, resets } = limitParts(l)
+  return number + resets
+}
+
+/**
+ * The columns kept after every bar for its figures: the longest each tail can be, written by the same
+ * functions, so the bars keep their width as the figures change and only the terminal width moves them.
+ */
+const TAIL_COLUMNS = Math.max(
+  contextTail(100, 999_999, 10_000_000).length, // " 100% 1000k/10.0M"
+  limitTail({ kind: '', percentUsed: 100, resetsAt: '2000-01-01T00:00:00Z' }).length, // " 100% resets Ddd HH:MM"
+)
+
+/**
+ * A limit's fill: green when unused through yellow and orange to red when full, the hue alone moving.
+ * Raw colours do not follow the theme, so lightness sits in the middle where both light and dark read it.
+ */
+export const usageColor = (pct: number, isFaded = false): string => {
+  const hue = 120 * (1 - Math.min(100, Math.max(0, pct)) / 100)
+  // Faded lowers saturation, not lightness: a muted hue reads as quieter on light and dark alike.
+  const s = isFaded ? 0.35 : 0.75
+  const l = 0.45
+  const channel = (n: number) => {
+    const k = (n + hue / 30) % 12
+    const v = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(v * 255).toString(16).padStart(2, '0')
+  }
+  return `#${channel(0)}${channel(8)}${channel(4)}`
+}
+
+/**
+ * A limit's number once it should draw the eye: yellow from 50%, orange from 75%, red from 90%, by the
+ * number as shown (rounded), in the bar's own colours; undefined below, where it stays dim.
+ */
+export const usageNumberColor = (pct: number): string | undefined => {
+  const shown = Math.round(pct)
+  if (shown >= 90) return usageColor(100)
+  if (shown >= 75) return usageColor(75)
+  if (shown >= 50) return usageColor(50)
+  return undefined
+}
+
+/** From this many tokens in context the numbers turn orange and the band suggests /compact. */
+const COMPACT_AT = 250_000
+
+/** Limits drawn faded, so stacked limit rows read as separate bars; dimColor would grey a raw colour out. */
+const FADED_LIMITS = new Set(['seven_day'])
+
+/** Splits `width` cells across segments by tokens, largest remainders first, so the bar is exactly `width`. */
+export const cells = (segments: Segment[], max: number, width: number): number[] => {
+  const exact = segments.map(s => (max > 0 ? (s.tokens / max) * width : 0))
+  const out = exact.map(Math.floor)
+  let left = Math.min(width, Math.round(exact.reduce((a, b) => a + b, 0))) - out.reduce((a, b) => a + b, 0)
+  const order = exact.map((x, i) => ({ i, rest: x - Math.floor(x) })).sort((a, b) => b.rest - a.rest)
+  for (const { i } of order) {
+    if (left <= 0) break
+    out[i] = (out[i] ?? 0) + 1
+    left -= 1
+  }
+  // A used category with tokens always shows at least one cell, taken from free space.
+  segments.forEach((s, i) => {
+    if (s.kind === 'used' && s.tokens > 0 && out[i] === 0) {
+      const free = segments.findIndex((f, j) => f.kind === 'free' && (out[j] ?? 0) > 0)
+      if (free >= 0) {
+        out[free] = (out[free] ?? 1) - 1
+        out[i] = 1
+      }
+    }
+  })
+  return out
+}
+
+/** The branch of the session's working directory, `detached <sha>` on a detached HEAD, undefined outside git. */
+const gitBranch = async ($: EngineInterface): Promise<string | undefined> => {
+  const head = await $.process.run(['git', 'branch', '--show-current'], { timeoutMs: 2000 })
+  if (head.exitCode !== 0) return undefined
+  if (head.stdout.trim() !== '') return head.stdout.trim()
+  const sha = await $.process.run(['git', 'rev-parse', '--short', 'HEAD'], { timeoutMs: 2000 })
+  return sha.exitCode === 0 && sha.stdout.trim() !== '' ? `detached ${sha.stdout.trim()}` : undefined
+}
+
+const measure = async ($: EngineInterface) => {
+  const [usage, branch] = await Promise.all([
+    $.session.usage({ breakdown: 'summary' }),
+    gitBranch($).catch(() => undefined),
+  ])
+  const b = usage.context.breakdown
+  const segments: Segment[] = (b?.categories ?? [])
+    .flatMap(c => (c.kind === 'deferred' ? [] : [{ name: c.name, color: c.color, tokens: c.tokens, kind: c.kind }]))
+  const next: Snapshot = {
+    segments,
+    totalTokens: b?.totalTokens ?? usage.context.tokens ?? 0,
+    maxTokens: b?.rawMaxTokens ?? usage.context.window,
+    percent: b?.percentage ?? usage.context.percent ?? 0,
+    limits: usage.rateLimits.map((l): Limit => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
+    usd: usage.cost?.usd,
+    branch,
+  }
+  await update($, snapshot, () => next)
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+    await $.command.register({ name: 'usage-bar', description: 'Toggle the context and usage bar above the prompt' })
+    const stored = await $.store.get(STORE_KEY)
+    if (typeof stored === 'boolean') await update($, isVisible, () => stored)
+    await measure($).catch(() => undefined)
+    return started
+  })
+
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    if (await read($, isVisible)) await measure($).catch(() => undefined)
+    return result
+  })
+
+  on('command.run', { command: 'usage-bar' }, async $ => {
+    const now = !(await read($, isVisible))
+    await update($, isVisible, () => now)
+    await $.store.set(STORE_KEY, now)
+    if (now) await measure($).catch(() => undefined)
+    return { text: now ? 'Usage bar shown.' : 'Usage bar hidden.' }
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const snap = await read($, snapshot)
+    if (e.props.hasSurvey || snap === null || !(await read($, isVisible))) return next(e)
+
+    const { Box, Text } = $.ui.resolve(e)
+    // One width for every bar, from the terminal width alone.
+    const width = Math.max(0, e.props.bodyColumns - LABEL - TAIL_COLUMNS - 1)
+    const widths = cells(snap.segments, snap.maxTokens, width)
+    const used = snap.segments.filter(s => s.kind === 'used' && s.tokens > 0)
+    const isLarge = snap.totalTokens >= COMPACT_AT
+
+    return (
+      <Box flexDirection="column">
+        {snap.branch !== undefined && (
+          <Text wrap="truncate">
+            <Text bold>{'Branch'.padEnd(LABEL)}</Text>
+            <Text color="suggestion">{snap.branch}</Text>
+          </Text>
+        )}
+        <Box>
+          <Text bold>{'Context'.padEnd(LABEL)}</Text>
+          {snap.segments.map((s, i) => {
+            const n = widths[i] ?? 0
+            return n > 0 ? (
+              <Text color={s.color} dimColor={s.kind !== 'used'}>
+                {(s.kind === 'used' ? '█' : s.kind === 'buffer' ? '▒' : '░').repeat(n)}
+              </Text>
+            ) : null
+          })}
+          <Text {...(isLarge ? { color: usageColor(75) } : { dimColor: true })} wrap="truncate-end">
+            {contextTail(snap.percent, snap.totalTokens, snap.maxTokens)}
+          </Text>
+        </Box>
+        <Text wrap="truncate">
+          {' '.repeat(LABEL)}
+          {used.map(s => (
+            <Text>
+              <Text color={s.color}>■</Text>
+              <Text dimColor>{` ${s.name} ${kTokens(s.tokens)}  `}</Text>
+            </Text>
+          ))}
+        </Text>
+        {isLarge && (
+          <Text color={usageColor(75)} wrap="truncate-end">
+            {`${' '.repeat(LABEL)}Context above ${kTokens(COMPACT_AT)}: run /compact to free space`}
+          </Text>
+        )}
+        {snap.limits.map(l => {
+          const label = (LIMIT_NAMES[l.kind] ?? l.kind).padEnd(LABEL)
+          const fill = Math.min(width, Math.round((Math.min(100, l.percentUsed) / 100) * width))
+          const { number, resets } = limitParts(l)
+          const alert = usageNumberColor(l.percentUsed)
+          return (
+            <Box>
+              <Text bold>{label}</Text>
+              <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
+              <Text dimColor>{'░'.repeat(width - fill)}</Text>
+              <Text {...(alert ? { color: alert } : { dimColor: true })}>{number}</Text>
+              {resets !== '' && (
+                <Text dimColor wrap="truncate-end">
+                  {resets}
+                </Text>
+              )}
+            </Box>
+          )
+        })}
+        {snap.limits.length === 0 && snap.usd !== undefined && (
+          <Text dimColor>{`${'Cost'.padEnd(LABEL)}$${snap.usd.toFixed(2)} this session (no subscription limits reported)`}</Text>
+        )}
+      </Box>
+    )
+  })
+}

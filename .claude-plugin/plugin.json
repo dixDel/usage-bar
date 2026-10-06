@@ -1,0 +1,7 @@
+{
+  "name": "usage-bar",
+  "version": "0.1.0",
+  "description": "Git branch, context window by category and rate-limit usage above the prompt, toggled with /usage-bar",
+  "author": { "name": "Didier Delhaye" },
+  "types": "./types/index.d.ts"
+}
