@@ -317,12 +317,12 @@ const lines = (root: Node): string[] => {
   return (band(root)?.children ?? []).map(plain)
 }
 
-test('5h and 7d share one row, their bars the same width', async ($, on) => {
+test('5h and 7d share one row, all three bars the same width', async ($, on) => {
   const figures = withFigures(30, 60_000, [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: '2026-10-06T14:00:00Z' }, { kind: 'seven_day', percentUsed: 7 }])
   const tree = await drawn($, on, figures)
   const rows = barRows(tree)
   expect(rows.length).toBe(3)
-  expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
+  expect(new Set(rows.map(r => r.bar.length)).size).toBe(1)
   expect(lines(tree).filter(l => l.trimStart().startsWith('5h')).map(l => l.includes('7d'))).toEqual([true])
 })
 
@@ -344,7 +344,7 @@ test('a terminal too narrow for halves draws each limit on its own row', async (
   const tree = await drawn($, on, SHORT, 70)
   const rows = barRows(tree)
   expect(lines(tree).filter(l => /^ *(5h|7d)/.test(l)).length).toBe(2)
-  expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
+  expect(new Set(rows.map(r => r.bar.length)).size).toBe(1)
 })
 
 test('the bars keep their width when the figures after them grow or shrink', async ($, on) => {
@@ -357,8 +357,8 @@ test('the bars keep their width when the figures after them grow or shrink', asy
 test('the bars follow the terminal width', async ($, on) => {
   const draw = rowsAt(on)
   const wide = await draw($, SHORT, 120)
-  const narrow = await draw($, SHORT, 60)
-  expect((wide[0]?.bar.length ?? 0) - (narrow[0]?.bar.length ?? 0)).toBe(60)
+  const narrow = await draw($, SHORT, 100)
+  expect((wide[0]?.bar.length ?? 0) - (narrow[0]?.bar.length ?? 0)).toBe(10) // two bars share the 20 columns
 })
 
 for (const columns of [100, 70, 30]) {

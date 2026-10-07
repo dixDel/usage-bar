@@ -43,7 +43,7 @@ const limitTail = (l: Limit) => {
  * The columns kept after each bar for its figures: the longest each tail can be, written by the same
  * functions, so the bars keep their width as the figures change and only the terminal width moves them.
  */
-const CONTEXT_TAIL = contextTail(100, 999_999, 10_000_000).length // " 100% 1000k/10.0M"
+// Longer than the context's " 100% 1000k/10.0M", so it leaves the context's figures room too.
 const LIMIT_TAIL = limitTail({ kind: '', percentUsed: 100, resetsAt: '2000-01-01T00:00:00Z' }).length // " 100% resets Ddd HH:MM"
 
 /** The label column of a limit drawn in the right half: the longest known name and a space. */
@@ -205,11 +205,10 @@ export const register: Register = on => {
     if (e.props.hasSurvey || snap === null || !(await read($, isVisible))) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
-    // Bar widths from the terminal width alone: the context takes the whole row, two limits share one.
-    const width = Math.max(0, e.props.bodyColumns - LABEL - CONTEXT_TAIL - 1)
+    // One width for every bar, from the terminal width alone: half a row when two limits share one.
     const halfWidth = Math.floor((e.props.bodyColumns - LABEL - RIGHT_LABEL - 2 * LIMIT_TAIL - GAP - 1) / 2)
     const isPaired = halfWidth >= MIN_HALF_BAR
-    const limitWidth = isPaired ? halfWidth : Math.max(0, e.props.bodyColumns - LABEL - LIMIT_TAIL - 1)
+    const width = isPaired ? halfWidth : Math.max(0, e.props.bodyColumns - LABEL - LIMIT_TAIL - 1)
     const limitRows = isPaired
       ? snap.limits.flatMap((l, i) => (i % 2 === 0 ? [snap.limits.slice(i, i + 2)] : []))
       : snap.limits.map(l => [l])
@@ -262,7 +261,7 @@ export const register: Register = on => {
             {row.map((l, i) => {
               // Right-aligned, so each name sits against its bar.
               const label = `${LIMIT_NAMES[l.kind] ?? l.kind} `.padStart(i === 0 ? LABEL : RIGHT_LABEL)
-              const fill = Math.min(limitWidth, Math.round((Math.min(100, l.percentUsed) / 100) * limitWidth))
+              const fill = Math.min(width, Math.round((Math.min(100, l.percentUsed) / 100) * width))
               const { number, resets } = limitParts(l)
               const alert = usageNumberColor(l.percentUsed)
               // A left half keeps its full tail, so the right half starts at the same column whatever the figures.
@@ -271,7 +270,7 @@ export const register: Register = on => {
                 <Box key={l.kind}>
                   <Text bold>{label}</Text>
                   <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
-                  <Text dimColor>{'░'.repeat(limitWidth - fill)}</Text>
+                  <Text dimColor>{'░'.repeat(width - fill)}</Text>
                   <Text {...(alert ? { color: alert } : { dimColor: true })}>{number}</Text>
                   {tail !== '' && (
                     <Text dimColor wrap="truncate-end">
