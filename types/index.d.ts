@@ -9,6 +9,10 @@ export type Snapshot = {
   usd?: number
   /** The session's git branch, `detached <sha>` on a detached HEAD; absent outside a repository. */
   branch?: string
+  /** The session's working directory, the home directory written `~`. */
+  folder?: string
+  /** The main loop's model, as /model shows it. */
+  model?: string
 }
 
 declare module 'claude-code' {
