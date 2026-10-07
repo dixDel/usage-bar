@@ -373,12 +373,12 @@ test('without limits the cost row states the cost alone and truncates', async ($
   expect(cost).toEqual({ text: 'Cost    $1.23 this session', props: { dimColor: true, wrap: 'truncate-end' } })
 })
 
-test('the 7d fill is faded, never greyed by dimColor, the 5h fill is vivid', async ($, on) => {
+test('the 5h and 7d fills are faded, never greyed by dimColor', async ($, on) => {
   const tree = await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 90 }, { kind: 'seven_day', percentUsed: 20 }] })
   const fills = texts(tree)
     .filter(t => /^█+$/.test(t.text) && (t.props as { color?: string } | undefined)?.color?.startsWith('#'))
     .map(t => t.props)
-  expect(fills).toEqual([{ color: usageColor(90) }, { color: usageColor(20, true) }])
+  expect(fills).toEqual([{ color: usageColor(90, true) }, { color: usageColor(20, true) }])
 })
 
 const hhmm = (at: Date) => `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`

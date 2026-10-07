@@ -85,9 +85,6 @@ export const usageNumberColor = (pct: number): string | undefined => {
 /** From this many tokens in context the numbers turn orange and the band suggests /compact. */
 const COMPACT_AT = 250_000
 
-/** Limits drawn faded, so stacked limit rows read as separate bars; dimColor would grey a raw colour out. */
-const FADED_LIMITS = new Set(['seven_day'])
-
 /** Splits `width` cells across segments by tokens, largest remainders first, so the bar is exactly `width`. */
 export const cells = (segments: Segment[], max: number, width: number): number[] => {
   const exact = segments.map(s => (max > 0 ? (s.tokens / max) * width : 0))
@@ -275,7 +272,8 @@ export const register: Register = on => {
               return (
                 <Box key={l.kind}>
                   <Text bold>{label}</Text>
-                  <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
+                  {/* Faded, to sit quietly beside the chat; dimColor would grey a raw colour out. */}
+                  <Text color={usageColor(l.percentUsed, true)}>{'█'.repeat(fill)}</Text>
                   <Text dimColor>{'░'.repeat(width - fill)}</Text>
                   <Text {...(alert ? { color: alert } : { dimColor: true })}>{number}</Text>
                   {tail !== '' && (
