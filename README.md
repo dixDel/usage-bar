@@ -15,10 +15,12 @@ Context ███░░░░░░░▒ 26% 260k/1.0M
   a repository) and the model as `/model` shows it, and at its right end the local and public IP
   addresses. A narrow terminal shortens the rule first, then drops the local address, then the public
   one, then cuts the model. A `/cd`, `/model` or checkout outside a turn shows at the next prompt.
-- **Addresses**: the local one from `ipconfig getifaddr en0`/`en1` (macOS) or `hostname -I` (Linux); the
-  public one from `https://api.ipify.org`, asked through Claude Code at start, on every prompt and every
-  minute while the band shows, so a VPN switched on or off shows within a minute. Either is left out when
-  it cannot be read within 3 seconds.
+- **Addresses**: the local one where the default route leaves, its interface from `route -n get default`
+  (macOS) or its source from `ip route get 1.1.1.1` (Linux, never a container bridge), with
+  `ipconfig getifaddr en0`/`en1` and `hostname -I` as a last resort; the public one from
+  `https://api.ipify.org`, asked through Claude Code at start, on every prompt and every minute while the
+  band shows, so a VPN switched on or off shows within a minute. One lookup runs at a time. Either is left
+  out when it cannot be read within 3 seconds.
 - **Context**: the context window by category, with free space and the autocompact buffer, the legend
   hanging from it. From 250k tokens the figures turn orange and a hint under the legend suggests
   `/compact`.
