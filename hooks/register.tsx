@@ -326,7 +326,7 @@ export const register: Register = on => {
             {row.map((l, i) => {
               // Right-aligned, so each name sits against its bar.
               const label = `${LIMIT_NAMES[l.kind] ?? l.kind} `.padStart(i === 0 ? LABEL : RIGHT_LABEL)
-              const fill = Math.min(width, Math.round((Math.min(100, l.percentUsed) / 100) * width))
+              const fill = Math.round((Math.min(100, Math.max(0, l.percentUsed)) / 100) * width)
               const { number, resets } = limitParts(l)
               const alert = usageNumberColor(l.percentUsed)
               // A left half keeps its full tail, so the right half starts at the same column whatever the figures.

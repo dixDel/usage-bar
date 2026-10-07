@@ -441,6 +441,11 @@ test('the 5h and 7d fills are faded, never greyed by dimColor', async ($, on) =>
   expect(fills).toEqual([{ color: usageColor(90, true) }, { color: usageColor(20, true) }])
 })
 
+test('a limit reported below 0% draws an empty bar rather than failing', async ($, on) => {
+  const rows = barRows(await drawn($, on, { ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: -5 }] }))
+  expect(rows.find(r => r.row.includes('5h'))?.bar).toMatch(/^░+$/)
+})
+
 const hhmm = (at: Date) => `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
 const weekday = (at: Date) => new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(at)
 
