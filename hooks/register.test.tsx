@@ -428,6 +428,17 @@ for (const columns of [100, 70, 30]) {
   })
 }
 
+for (const columns of [100, 70]) {
+  test(`a limit name the bar does not know is cut to its column, the row still fitting ${columns} columns`, async ($, on) => {
+    const figures = withFigures(100, 1_000_000, [LONG.rateLimits[0], { kind: 'seven_day_opus', percentUsed: 100, resetsAt: '2026-10-09T08:00:00Z' }])
+    const tree = await drawn($, on, figures, columns)
+    const limitLines = lines(tree).filter(l => /^ *(5h|seven)/.test(l))
+    expect(limitLines.length).toBeGreaterThan(0)
+    for (const line of limitLines) expect(line.length).toBeLessThanOrEqual(columns)
+    expect(plain(tree)).not.toContain('seven_day_opus')
+  })
+}
+
 test('without limits the cost row states the cost alone and truncates', async ($, on) => {
   const cost = texts(await drawn($, on, { ...USAGE, rateLimits: [] }, 30)).find(t => t.text.startsWith('Cost'))
   expect(cost).toEqual({ text: 'Cost    $1.23 this session', props: { dimColor: true, wrap: 'truncate-end' } })
