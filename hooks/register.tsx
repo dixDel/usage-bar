@@ -275,7 +275,8 @@ export const register: Register = on => {
     const branchOff = (isLast: boolean) => <Text dimColor>{`${isLast ? '└' : '├'} `.padStart(LABEL)}</Text>
 
     return (
-      <Box flexDirection="column">
+      // A blank row above, so the chat's last line never sits against the rule.
+      <Box flexDirection="column" marginTop={1}>
         {/* The separator from the chat, titled with the folder, branch and model, the addresses at its right end. */}
         <Text wrap="truncate-end">
           <Text dimColor>{title === '' ? '' : '── '}</Text>

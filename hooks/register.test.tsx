@@ -275,6 +275,11 @@ test('offline, or with an answer that is not an address, the rule shows none', a
   expect(rule).toMatch(/^── \/a ─+$/)
 })
 
+test('a blank row sets the band apart from the chat above it', async ($, on) => {
+  const band = JSON.stringify(await drawn($, on))
+  expect(band).toContain('"flexDirection":"column","marginTop":1')
+})
+
 test('with nothing to show the rule has no title', async ($, on) => {
   const [rule] = lines(await drawn($, on))
   expect(rule).toBe('─'.repeat(BAND.bodyColumns - 1))
