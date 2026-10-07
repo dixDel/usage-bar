@@ -323,27 +323,27 @@ test('5h and 7d share one row, their bars the same width', async ($, on) => {
   const rows = barRows(tree)
   expect(rows.length).toBe(3)
   expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
-  expect(lines(tree).filter(l => l.startsWith('5h')).map(l => l.includes('7d'))).toEqual([true])
+  expect(lines(tree).filter(l => l.trimStart().startsWith('5h')).map(l => l.includes('7d'))).toEqual([true])
 })
 
 test('the 7d half starts at the same column whatever the 5h figures', async ($, on) => {
   const f = fakes(on)
   const draw = async (figures: unknown) => {
     f.usage = figures
-    return lines((await (await mount($)).drawn()) as Node).find(l => l.startsWith('5h'))?.indexOf('7d')
+    return lines((await (await mount($)).drawn()) as Node).find(l => l.trimStart().startsWith('5h'))?.indexOf('7d')
   }
   expect(await draw(SHORT)).toBe(await draw(LONG))
 })
 
-test('a third limit starts a row of its own', async ($, on) => {
+test('a third limit starts a row of its own, names right-aligned against their bars', async ($, on) => {
   const tree = await drawn($, on, withFigures(9, 9_000, [...SHORT.rateLimits, { kind: 'spend_limit', percentUsed: 12 }]))
-  expect(lines(tree).filter(l => /^(5h|spend)/.test(l)).map(l => l.slice(0, 5))).toEqual(['5h   ', 'spend'])
+  expect(lines(tree).filter(l => /^ *(5h|spend)/.test(l)).map(l => l.slice(0, 8))).toEqual(['     5h ', '  spend '])
 })
 
 test('a terminal too narrow for halves draws each limit on its own row', async ($, on) => {
   const tree = await drawn($, on, SHORT, 70)
   const rows = barRows(tree)
-  expect(lines(tree).filter(l => /^(5h|7d)/.test(l)).length).toBe(2)
+  expect(lines(tree).filter(l => /^ *(5h|7d)/.test(l)).length).toBe(2)
   expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
 })
 
@@ -364,7 +364,7 @@ test('the bars follow the terminal width', async ($, on) => {
 for (const columns of [100, 70, 30]) {
   test(`the longest figures still fit in ${columns} columns`, async ($, on) => {
     const tree = await drawn($, on, LONG, columns)
-    for (const line of lines(tree).filter(l => /^(Context|5h|7d)/.test(l))) expect(line.length).toBeLessThanOrEqual(columns)
+    for (const line of lines(tree).filter(l => /^(Context| *5h| *7d)/.test(l))) expect(line.length).toBeLessThanOrEqual(columns)
   })
 }
 

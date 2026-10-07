@@ -260,7 +260,8 @@ export const register: Register = on => {
         {limitRows.map(row => (
           <Box key={row.map(l => l.kind).join(' ')}>
             {row.map((l, i) => {
-              const label = (LIMIT_NAMES[l.kind] ?? l.kind).padEnd(i === 0 ? LABEL : RIGHT_LABEL)
+              // Right-aligned, so each name sits against its bar.
+              const label = `${LIMIT_NAMES[l.kind] ?? l.kind} `.padStart(i === 0 ? LABEL : RIGHT_LABEL)
               const fill = Math.min(limitWidth, Math.round((Math.min(100, l.percentUsed) / 100) * limitWidth))
               const { number, resets } = limitParts(l)
               const alert = usageNumberColor(l.percentUsed)
