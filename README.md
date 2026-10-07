@@ -7,7 +7,7 @@ A Claude Code mod that draws a band above the prompt:
 Context ███████████░░░░░░░░░░░░░░▒▒ 26% 260k/1.0M
         ■ System prompt 20k  ■ Messages 240k
         Context above 250k: run /compact to free space
-5h      ████░░░░░░░ 43% resets 18:00       7d    █░░░░░░░░░ 7% resets Fri 00:05
+     5h ████░░░░░░░ 43% resets 18:00          7d █░░░░░░░░░░ 7% resets Fri 00:05
 ```
 
 - **First row**: the session's folder (home written `~`), its git branch (`detached <sha>` on a detached
