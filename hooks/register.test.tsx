@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cells, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
+import { cells, printable, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
 
 const USAGE = {
   startedAt: 0,
@@ -118,6 +118,15 @@ describe('tildePath', () => {
   test('leaves other paths, and a sibling sharing the prefix, alone', () => {
     expect(tildePath('/Users/meg/app', '/Users/me')).toBe('/Users/meg/app')
     expect(tildePath('/opt/app', undefined)).toBe('/opt/app')
+  })
+})
+
+describe('printable', () => {
+  test('drops C0, DEL and C1 control characters', () => {
+    expect(printable('a\u001b[31mb\u0007\nc\u007f\u009bd')).toBe('a[31mbcd')
+  })
+  test('keeps everything else, wide characters included', () => {
+    expect(printable('~/Code/app ⎇ é 日本')).toBe('~/Code/app ⎇ é 日本')
   })
 })
 
@@ -257,6 +266,12 @@ test('outside a git repository the row keeps the folder and model', async ($, on
   const text = plain((await (await mount($)).drawn()) as Node)
   expect(text).toContain('/tmp/x  Sonnet 5.5')
   expect(text).not.toContain('⎇')
+})
+
+test('control characters in the folder or model never reach the terminal', async ($, on) => {
+  fakes(on, { place: { cwd: '/tmp/a\u001b[2Jb', model: 'Opus\u0007 5.5' } })
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/^── \/tmp\/a\[2Jb {2}Opus 5\.5 ─+$/)
 })
 
 test('the local and public addresses end the rule, at the full width', async ($, on) => {

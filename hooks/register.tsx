@@ -123,6 +123,9 @@ const gitBranch = async ($: EngineInterface): Promise<string | undefined> => {
 export const tildePath = (dir: string, home: string | undefined): string =>
   home && (dir === home || dir.startsWith(`${home}/`)) ? `~${dir.slice(home.length)}` : dir
 
+/** `text` without C0, DEL or C1 control characters, so a folder name can never move the cursor or restyle the terminal. */
+export const printable = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+
 /** Where the session is: its folder, branch and model, each undefined when it cannot be read. */
 const place = async ($: EngineInterface) => {
   const [cwd, home, branch, model] = await Promise.all([
@@ -131,7 +134,8 @@ const place = async ($: EngineInterface) => {
     gitBranch($).catch(() => undefined),
     $.session.model().catch(() => undefined),
   ])
-  return { folder: cwd === undefined ? undefined : tildePath(cwd, home), branch, model }
+  const shown = (s: string | undefined) => (s === undefined ? undefined : printable(s))
+  return { folder: shown(cwd === undefined ? undefined : tildePath(cwd, home)), branch: shown(branch), model: shown(model) }
 }
 
 /** The categories the bar draws; deferred ones and any kind the engine adds later are left out. */
