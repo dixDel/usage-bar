@@ -3,7 +3,7 @@
 A Claude Code mod that draws a band above the prompt:
 
 ```
-── ~/Code/app  ⎇ develop  Opus 5.5 (1M context) ────────────────────────────────
+── ~/Code/app  ⎇ develop  Opus 5.5 (1M context) ── 192.168.1.23 → 203.0.113.7 ──
 Context ███░░░░░░░▒ 26% 260k/1.0M
       ├ ■ System prompt 20k  ■ Messages 240k
       └ Context above 250k: run /compact to free space
@@ -12,8 +12,13 @@ Context ███░░░░░░░▒ 26% 260k/1.0M
 
 - **First row**: a rule setting the band apart from the chat, titled with the session's folder (home
   written `~`), its git branch (`detached <sha>` on a detached HEAD, absent outside a repository) and the
-  model as `/model` shows it. A narrow terminal shortens the rule first, then cuts the model. A `/cd`,
-  `/model` or checkout outside a turn shows at the next prompt.
+  model as `/model` shows it, and at its right end the local and public IP addresses. A narrow terminal
+  shortens the rule first, then drops the local address, then the public one, then cuts the model. A
+  `/cd`, `/model` or checkout outside a turn shows at the next prompt.
+- **Addresses**: the local one from `ipconfig getifaddr en0`/`en1` (macOS) or `hostname -I` (Linux); the
+  public one from `https://api.ipify.org`, asked through Claude Code at start, on every prompt and every
+  minute while the band shows, so a VPN switched on or off shows within a minute. Either is left out when
+  it cannot be read within 3 seconds.
 - **Context**: the context window by category, with free space and the autocompact buffer, the legend
   hanging from it. From 250k tokens the figures turn orange and a hint under the legend suggests
   `/compact`.
