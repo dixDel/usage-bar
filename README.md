@@ -10,11 +10,11 @@ Context ███░░░░░░░▒ 26% 260k/1.0M
      5h ████░░░░░░░ 43% resets 18:00          7d █░░░░░░░░░░ 7% resets Fri 00:05
 ```
 
-- **First row**: a rule setting the band apart from the chat, titled with the session's folder (home
-  written `~`), its git branch (`detached <sha>` on a detached HEAD, absent outside a repository) and the
-  model as `/model` shows it, and at its right end the local and public IP addresses. A narrow terminal
-  shortens the rule first, then drops the local address, then the public one, then cuts the model. A
-  `/cd`, `/model` or checkout outside a turn shows at the next prompt.
+- **First row**: a blank row, then a rule setting the band apart from the chat, titled with the
+  session's folder (home written `~`), its git branch (`detached <sha>` on a detached HEAD, absent outside
+  a repository) and the model as `/model` shows it, and at its right end the local and public IP
+  addresses. A narrow terminal shortens the rule first, then drops the local address, then the public
+  one, then cuts the model. A `/cd`, `/model` or checkout outside a turn shows at the next prompt.
 - **Addresses**: the local one from `ipconfig getifaddr en0`/`en1` (macOS) or `hostname -I` (Linux); the
   public one from `https://api.ipify.org`, asked through Claude Code at start, on every prompt and every
   minute while the band shows, so a VPN switched on or off shows within a minute. Either is left out when
