@@ -40,13 +40,18 @@ const limitTail = (l: Limit) => {
 }
 
 /**
- * The columns kept after every bar for its figures: the longest each tail can be, written by the same
+ * The columns kept after each bar for its figures: the longest each tail can be, written by the same
  * functions, so the bars keep their width as the figures change and only the terminal width moves them.
  */
-const TAIL_COLUMNS = Math.max(
-  contextTail(100, 999_999, 10_000_000).length, // " 100% 1000k/10.0M"
-  limitTail({ kind: '', percentUsed: 100, resetsAt: '2000-01-01T00:00:00Z' }).length, // " 100% resets Ddd HH:MM"
-)
+const CONTEXT_TAIL = contextTail(100, 999_999, 10_000_000).length // " 100% 1000k/10.0M"
+const LIMIT_TAIL = limitTail({ kind: '', percentUsed: 100, resetsAt: '2000-01-01T00:00:00Z' }).length // " 100% resets Ddd HH:MM"
+
+/** The label column of a limit drawn in the right half: the longest known name and a space. */
+const RIGHT_LABEL = Math.max(...Object.values(LIMIT_NAMES).map(n => n.length)) + 1
+/** The space between the two limits sharing a row. */
+const GAP = 2
+/** Below this many cells a halved bar says too little, and each limit takes a row of its own. */
+const MIN_HALF_BAR = 8
 
 /**
  * A limit's fill: green when unused through yellow and orange to red when full, the hue alone moving.
@@ -200,8 +205,14 @@ export const register: Register = on => {
     if (e.props.hasSurvey || snap === null || !(await read($, isVisible))) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
-    // One width for every bar, from the terminal width alone.
-    const width = Math.max(0, e.props.bodyColumns - LABEL - TAIL_COLUMNS - 1)
+    // Bar widths from the terminal width alone: the context takes the whole row, two limits share one.
+    const width = Math.max(0, e.props.bodyColumns - LABEL - CONTEXT_TAIL - 1)
+    const halfWidth = Math.floor((e.props.bodyColumns - LABEL - RIGHT_LABEL - 2 * LIMIT_TAIL - GAP - 1) / 2)
+    const isPaired = halfWidth >= MIN_HALF_BAR
+    const limitWidth = isPaired ? halfWidth : Math.max(0, e.props.bodyColumns - LABEL - LIMIT_TAIL - 1)
+    const limitRows = isPaired
+      ? snap.limits.flatMap((l, i) => (i % 2 === 0 ? [snap.limits.slice(i, i + 2)] : []))
+      : snap.limits.map(l => [l])
     const widths = cells(snap.segments, snap.maxTokens, width)
     const used = snap.segments.filter(s => s.kind === 'used' && s.tokens > 0)
     const isLarge = snap.totalTokens >= COMPACT_AT
@@ -246,25 +257,31 @@ export const register: Register = on => {
             {`${' '.repeat(LABEL)}Context above ${kTokens(COMPACT_AT)}: run /compact to free space`}
           </Text>
         )}
-        {snap.limits.map(l => {
-          const label = (LIMIT_NAMES[l.kind] ?? l.kind).padEnd(LABEL)
-          const fill = Math.min(width, Math.round((Math.min(100, l.percentUsed) / 100) * width))
-          const { number, resets } = limitParts(l)
-          const alert = usageNumberColor(l.percentUsed)
-          return (
-            <Box key={l.kind}>
-              <Text bold>{label}</Text>
-              <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
-              <Text dimColor>{'░'.repeat(width - fill)}</Text>
-              <Text {...(alert ? { color: alert } : { dimColor: true })}>{number}</Text>
-              {resets !== '' && (
-                <Text dimColor wrap="truncate-end">
-                  {resets}
-                </Text>
-              )}
-            </Box>
-          )
-        })}
+        {limitRows.map(row => (
+          <Box key={row.map(l => l.kind).join(' ')}>
+            {row.map((l, i) => {
+              const label = (LIMIT_NAMES[l.kind] ?? l.kind).padEnd(i === 0 ? LABEL : RIGHT_LABEL)
+              const fill = Math.min(limitWidth, Math.round((Math.min(100, l.percentUsed) / 100) * limitWidth))
+              const { number, resets } = limitParts(l)
+              const alert = usageNumberColor(l.percentUsed)
+              // A left half keeps its full tail, so the right half starts at the same column whatever the figures.
+              const tail = i === 0 && row.length > 1 ? resets.padEnd(LIMIT_TAIL - number.length + GAP) : resets
+              return (
+                <Box key={l.kind}>
+                  <Text bold>{label}</Text>
+                  <Text color={usageColor(l.percentUsed, FADED_LIMITS.has(l.kind))}>{'█'.repeat(fill)}</Text>
+                  <Text dimColor>{'░'.repeat(limitWidth - fill)}</Text>
+                  <Text {...(alert ? { color: alert } : { dimColor: true })}>{number}</Text>
+                  {tail !== '' && (
+                    <Text dimColor wrap="truncate-end">
+                      {tail}
+                    </Text>
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+        ))}
         {snap.limits.length === 0 && snap.usd !== undefined && (
           // Also drawn on a subscription until its first response reports the limits, so it claims nothing about them.
           <Text dimColor wrap="truncate-end">{`${'Cost'.padEnd(LABEL)}$${snap.usd.toFixed(2)} this session`}</Text>

@@ -308,11 +308,43 @@ const rowsAt = (on: On) => {
   }
 }
 
-test('the context and limit bars are the same width', async ($, on) => {
+/** Each row of the band as the terminal shows it, nested pieces joined. */
+const lines = (root: Node): string[] => {
+  const band = (n: Node): Node | undefined =>
+    n.type === 'Box' && (n.props as { flexDirection?: string } | undefined)?.flexDirection === 'column'
+      ? n
+      : (n.children ?? []).flatMap(c => (typeof c === 'object' ? [band(c)] : [])).find(Boolean)
+  return (band(root)?.children ?? []).map(plain)
+}
+
+test('5h and 7d share one row, their bars the same width', async ($, on) => {
   const figures = withFigures(30, 60_000, [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: '2026-10-06T14:00:00Z' }, { kind: 'seven_day', percentUsed: 7 }])
-  const rows = barRows(await drawn($, on, figures))
+  const tree = await drawn($, on, figures)
+  const rows = barRows(tree)
   expect(rows.length).toBe(3)
-  expect(new Set(rows.map(r => r.bar.length)).size).toBe(1)
+  expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
+  expect(lines(tree).filter(l => l.startsWith('5h')).map(l => l.includes('7d'))).toEqual([true])
+})
+
+test('the 7d half starts at the same column whatever the 5h figures', async ($, on) => {
+  const f = fakes(on)
+  const draw = async (figures: unknown) => {
+    f.usage = figures
+    return lines((await (await mount($)).drawn()) as Node).find(l => l.startsWith('5h'))?.indexOf('7d')
+  }
+  expect(await draw(SHORT)).toBe(await draw(LONG))
+})
+
+test('a third limit starts a row of its own', async ($, on) => {
+  const tree = await drawn($, on, withFigures(9, 9_000, [...SHORT.rateLimits, { kind: 'spend_limit', percentUsed: 12 }]))
+  expect(lines(tree).filter(l => /^(5h|spend)/.test(l)).map(l => l.slice(0, 5))).toEqual(['5h   ', 'spend'])
+})
+
+test('a terminal too narrow for halves draws each limit on its own row', async ($, on) => {
+  const tree = await drawn($, on, SHORT, 70)
+  const rows = barRows(tree)
+  expect(lines(tree).filter(l => /^(5h|7d)/.test(l)).length).toBe(2)
+  expect(rows[1]?.bar.length).toBe(rows[2]?.bar.length)
 })
 
 test('the bars keep their width when the figures after them grow or shrink', async ($, on) => {
@@ -329,9 +361,10 @@ test('the bars follow the terminal width', async ($, on) => {
   expect((wide[0]?.bar.length ?? 0) - (narrow[0]?.bar.length ?? 0)).toBe(60)
 })
 
-for (const columns of [100, 30]) {
+for (const columns of [100, 70, 30]) {
   test(`the longest figures still fit in ${columns} columns`, async ($, on) => {
-    for (const { row } of barRows(await drawn($, on, LONG, columns))) expect(row.length).toBeLessThanOrEqual(columns)
+    const tree = await drawn($, on, LONG, columns)
+    for (const line of lines(tree).filter(l => /^(Context|5h|7d)/.test(l))) expect(line.length).toBeLessThanOrEqual(columns)
   })
 }
 
