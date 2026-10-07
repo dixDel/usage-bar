@@ -4,7 +4,7 @@ A Claude Code mod that draws a band above the prompt:
 
 ```
 ~/Code/app  ⎇ develop  Opus 5.5 (1M context)
-Context ███████████░░░░░░░░░░░░░░▒▒ 26% 260k/1.0M
+Context ███░░░░░░░▒ 26% 260k/1.0M
         ■ System prompt 20k  ■ Messages 240k
         Context above 250k: run /compact to free space
      5h ████░░░░░░░ 43% resets 18:00          7d █░░░░░░░░░░ 7% resets Fri 00:05
@@ -19,7 +19,7 @@ Context ███████████░░░░░░░░░░░░░
   figure turns yellow at 50%, orange at 75%, red at 90%. Resets are in local time. A terminal too narrow
   for two bars draws each on its own row.
 
-Bar widths are set by the terminal width alone, never by the figures. `/usage-bar` hides or shows the band; the
+Every bar has the same width, set by the terminal width alone, never by the figures. `/usage-bar` hides or shows the band; the
 choice is kept across sessions.
 
 ## Install
