@@ -3,7 +3,7 @@
 A Claude Code mod that draws a band above the prompt:
 
 ```
-Branch  develop
+~/Code/app  ⎇ develop  Opus 5.5 (1M context)
 Context ███████████░░░░░░░░░░░░░░▒▒ 26% 260k/1.0M
         ■ System prompt 20k  ■ Messages 240k
         Context above 250k: run /compact to free space
@@ -11,7 +11,9 @@ Context ███████████░░░░░░░░░░░░░
 7d      ██░░░░░░░░░░░░░░░░░░░░░░░░ 7% resets Fri 00:05
 ```
 
-- **Branch**: the session's git branch, `detached <sha>` on a detached HEAD, absent outside a repository.
+- **First row**: the session's folder (home written `~`), its git branch (`detached <sha>` on a detached
+  HEAD, absent outside a repository) and the model as `/model` shows it. A narrow terminal cuts the model
+  first. A `/cd`, `/model` or checkout outside a turn shows at the next prompt.
 - **Context**: the context window by category, with free space and the autocompact buffer. From 250k
   tokens the figures turn orange and the band suggests `/compact`.
 - **5h / 7d**: rate-limit usage, coloured green to red by level, 7d faded. The figure turns yellow at 50%,
