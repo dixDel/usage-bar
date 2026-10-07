@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cells, usageColor, usageNumberColor } from './register'
+import { cells, tildePath, usageColor, usageNumberColor } from './register'
 
 const USAGE = {
   startedAt: 0,
@@ -92,16 +92,40 @@ describe('usageNumberColor', () => {
   })
 })
 
+describe('tildePath', () => {
+  test('writes the home directory as ~', () => {
+    expect(tildePath('/Users/me/Code/app', '/Users/me')).toBe('~/Code/app')
+    expect(tildePath('/Users/me', '/Users/me')).toBe('~')
+  })
+  test('leaves other paths, and a sibling sharing the prefix, alone', () => {
+    expect(tildePath('/Users/meg/app', '/Users/me')).toBe('/Users/meg/app')
+    expect(tildePath('/opt/app', undefined)).toBe('/opt/app')
+  })
+})
+
 type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 type Git = Record<string, { exitCode: number; stdout: string }>
 type Node = { type?: string; props?: object; children?: (Node | string)[] }
 
+type Place = { cwd?: string; home?: string; model?: string }
+
 /**
- * Fakes the store, git, the usage figures and the engine's own band. `calls` logs each usage read
- * (`usage`) and git command; `usage` and `git` are swapped in place for the next measurement.
+ * Fakes the store, git, the usage figures, the folder and model, and the engine's own band. `calls` logs
+ * each usage read (`usage`) and git command; `usage`, `git` and `place` are swapped in place for the next
+ * measurement. With no `place`, the folder and model cannot be read.
  */
-const fakes = (on: On, init: { usage?: unknown; git?: Git; store?: Record<string, unknown> } = {}) => {
-  const f = { usage: init.usage ?? USAGE, git: init.git ?? {}, store: new Map(Object.entries(init.store ?? {})), calls: [] as string[] }
+const fakes = (on: On, init: { usage?: unknown; git?: Git; store?: Record<string, unknown>; place?: Place } = {}) => {
+  const f = {
+    usage: init.usage ?? USAGE,
+    git: init.git ?? {},
+    place: init.place ?? {},
+    store: new Map(Object.entries(init.store ?? {})),
+    calls: [] as string[],
+  }
+  const known = (v: string | undefined) => (v === undefined ? { deny: 'unset' } : { value: v })
+  on('session.cwd', () => known(f.place.cwd) as never)
+  on('session.model', () => known(f.place.model) as never)
+  on('env.get', () => ({ value: f.place.home }) as never)
   on('store.get', (_$, e) => ({ value: f.store.get(e.key) }) as never)
   on('store.set', (_$, e) => (f.store.set(e.key, e.value), { value: undefined }) as never)
   on('session.usage', () => (f.calls.push('usage'), { value: f.usage }) as never)
@@ -184,11 +208,13 @@ test('a category of a kind the bar does not know is left out', async ($, on) => 
   expect(texts(tree).filter(t => (t.props as { color?: string } | undefined)?.color === 'x')).toEqual([])
 })
 
-test('shows the current git branch', async ($, on) => {
-  fakes(on, { git: { 'git branch --show-current': { exitCode: 0, stdout: 'feature/301-thing\n' } } })
-  const text = JSON.stringify(await (await mount($)).drawn())
-  expect(text).toContain('Branch')
-  expect(text).toContain('feature/301-thing')
+test('shows the folder, branch and model on one row', async ($, on) => {
+  fakes(on, {
+    git: { 'git branch --show-current': { exitCode: 0, stdout: 'feature/301-thing\n' } },
+    place: { cwd: '/Users/me/Code/app', home: '/Users/me', model: 'Opus 5.5 (1M context)' },
+  })
+  const text = plain((await (await mount($)).drawn()) as Node)
+  expect(text).toContain('~/Code/app  ⎇ feature/301-thing  Opus 5.5 (1M context)')
 })
 
 test('a detached HEAD shows its short sha', async ($, on) => {
@@ -201,20 +227,28 @@ test('a detached HEAD shows its short sha', async ($, on) => {
   expect(JSON.stringify(await (await mount($)).drawn())).toContain('detached df04d8e')
 })
 
-test('outside a git repository there is no branch row', async ($, on) => {
-  const text = JSON.stringify(await drawn($, on))
-  expect(text).toContain('Context')
-  expect(text).not.toContain('Branch')
+test('outside a git repository the row keeps the folder and model', async ($, on) => {
+  fakes(on, { place: { cwd: '/tmp/x', model: 'Sonnet 5.5' } })
+  const text = plain((await (await mount($)).drawn()) as Node)
+  expect(text).toContain('/tmp/x  Sonnet 5.5')
+  expect(text).not.toContain('⎇')
 })
 
-test('a prompt picks up a branch changed outside the turn', async ($, on) => {
-  const f = fakes(on, { git: { 'git branch --show-current': { exitCode: 0, stdout: 'main\n' } } })
+test('with nothing to show there is no row', async ($, on) => {
+  const text = JSON.stringify(await drawn($, on))
+  expect(text).toContain('Context')
+  expect(text).not.toContain('⎇')
+})
+
+test('a prompt picks up a branch, folder or model changed outside the turn', async ($, on) => {
+  const f = fakes(on, { git: { 'git branch --show-current': { exitCode: 0, stdout: 'main\n' } }, place: { cwd: '/a', model: 'Opus 5.5' } })
   on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
   const ui = await mount($)
-  expect(plain((await ui.drawn()) as Node)).toContain('main')
+  expect(plain((await ui.drawn()) as Node)).toContain('/a  ⎇ main  Opus 5.5')
   f.git = { 'git branch --show-current': { exitCode: 0, stdout: 'feature/next\n' } }
+  f.place = { cwd: '/b', model: 'Haiku 4.5' }
   await $.prompt.submit({ text: 'hi' } as never)
-  expect(plain((await ui.drawn()) as Node)).toContain('feature/next')
+  expect(plain((await ui.drawn()) as Node)).toContain('/b  ⎇ feature/next  Haiku 4.5')
 })
 
 describe('session.measure', () => {

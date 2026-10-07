@@ -116,18 +116,30 @@ const gitBranch = async ($: EngineInterface): Promise<string | undefined> => {
   return sha.exitCode === 0 && sha.stdout.trim() !== '' ? `detached ${sha.stdout.trim()}` : undefined
 }
 
+/** `dir` with the home directory written `~`. */
+export const tildePath = (dir: string, home: string | undefined): string =>
+  home && (dir === home || dir.startsWith(`${home}/`)) ? `~${dir.slice(home.length)}` : dir
+
+/** Where the session is: its folder, branch and model, each undefined when it cannot be read. */
+const place = async ($: EngineInterface) => {
+  const [cwd, home, branch, model] = await Promise.all([
+    $.session.cwd().catch(() => undefined),
+    $.env.get('HOME').catch(() => undefined),
+    gitBranch($).catch(() => undefined),
+    $.session.model().catch(() => undefined),
+  ])
+  return { folder: cwd === undefined ? undefined : tildePath(cwd, home), branch, model }
+}
+
 /** The categories the bar draws; deferred ones and any kind the engine adds later are left out. */
 const SEGMENT_KINDS = new Set<string>(['used', 'free', 'buffer'] satisfies Segment['kind'][])
 
 const toLimits = (limits: readonly Limit[]): Limit[] =>
   limits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
 
-/** Everything: the context breakdown, the limits, the cost and the branch. */
+/** Everything: the context breakdown, the limits, the cost, the folder, the branch and the model. */
 const measure = async ($: EngineInterface) => {
-  const [usage, branch] = await Promise.all([
-    $.session.usage({ breakdown: 'summary' }),
-    gitBranch($).catch(() => undefined),
-  ])
+  const [usage, where] = await Promise.all([$.session.usage({ breakdown: 'summary' }), place($)])
   const b = usage.context.breakdown
   const segments: Segment[] = (b?.categories ?? []).flatMap(c =>
     SEGMENT_KINDS.has(c.kind) ? [{ name: c.name, color: c.color, tokens: c.tokens, kind: c.kind as Segment['kind'] }] : [],
@@ -139,15 +151,15 @@ const measure = async ($: EngineInterface) => {
     percent: b?.percentage ?? usage.context.percent ?? 0,
     limits: toLimits(usage.rateLimits),
     usd: usage.cost?.usd,
-    branch,
+    ...where,
   }
   await update($, snapshot, () => next)
 }
 
-/** The branch alone, for when it may have moved without the context moving. */
-const refreshBranch = async ($: EngineInterface) => {
-  const branch = await gitBranch($).catch(() => undefined)
-  await update($, snapshot, s => (s === null ? s : { ...s, branch }))
+/** The folder, branch and model alone, for when they may have moved without the context moving. */
+const refreshPlace = async ($: EngineInterface) => {
+  const where = await place($)
+  await update($, snapshot, s => (s === null ? s : { ...s, ...where }))
 }
 
 export const register: Register = on => {
@@ -169,10 +181,10 @@ export const register: Register = on => {
     return result
   })
 
-  // A checkout in a `!` command or another terminal shows at the next prompt rather than after its turn.
+  // A checkout in a `!` command or another terminal, or a /model or /cd, shows at the next prompt rather than after its turn.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (await read($, isVisible)) await refreshBranch($).catch(() => undefined)
+    if (await read($, isVisible)) await refreshPlace($).catch(() => undefined)
     return result
   }).catch(($, e, next) => next(e))
 
@@ -196,10 +208,14 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {snap.branch !== undefined && (
-          <Text wrap="truncate">
-            <Text bold>{'Branch'.padEnd(LABEL)}</Text>
-            <Text color="suggestion">{snap.branch}</Text>
+        {(snap.folder ?? snap.branch ?? snap.model) !== undefined && (
+          // Folder, branch, model: narrowing the terminal cuts the model first.
+          <Text wrap="truncate-end">
+            {snap.folder !== undefined && <Text bold>{snap.folder}</Text>}
+            {snap.branch !== undefined && <Text color="suggestion">{`${snap.folder !== undefined ? '  ' : ''}⎇ ${snap.branch}`}</Text>}
+            {snap.model !== undefined && (
+              <Text dimColor>{`${snap.folder !== undefined || snap.branch !== undefined ? '  ' : ''}${snap.model}`}</Text>
+            )}
           </Text>
         )}
         <Box>
