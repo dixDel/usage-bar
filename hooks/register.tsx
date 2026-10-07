@@ -215,19 +215,24 @@ export const register: Register = on => {
     const widths = cells(snap.segments, snap.maxTokens, width)
     const used = snap.segments.filter(s => s.kind === 'used' && s.tokens > 0)
     const isLarge = snap.totalTokens >= COMPACT_AT
+    const folder = snap.folder ?? ''
+    const branch = snap.branch === undefined ? '' : `${folder !== '' ? '  ' : ''}⎇ ${snap.branch}`
+    const model = snap.model === undefined ? '' : `${folder !== '' || branch !== '' ? '  ' : ''}${snap.model}`
+    const title = folder + branch + model
+    // The lines under the context bar hang from it, the last one closing the group.
+    const branchOff = (isLast: boolean) => <Text dimColor>{`${isLast ? '└' : '├'} `.padStart(LABEL)}</Text>
 
     return (
       <Box flexDirection="column">
-        {(snap.folder ?? snap.branch ?? snap.model) !== undefined && (
-          // Folder, branch, model: narrowing the terminal cuts the model first.
-          <Text wrap="truncate-end">
-            {snap.folder !== undefined && <Text bold>{snap.folder}</Text>}
-            {snap.branch !== undefined && <Text color="suggestion">{`${snap.folder !== undefined ? '  ' : ''}⎇ ${snap.branch}`}</Text>}
-            {snap.model !== undefined && (
-              <Text dimColor>{`${snap.folder !== undefined || snap.branch !== undefined ? '  ' : ''}${snap.model}`}</Text>
-            )}
-          </Text>
-        )}
+        {/* The separator from the chat, titled with the folder, branch and model: narrowing the terminal
+            shortens the rule first, then cuts the model. */}
+        <Text wrap="truncate-end">
+          <Text dimColor>{title === '' ? '' : '── '}</Text>
+          {folder !== '' && <Text bold>{folder}</Text>}
+          {branch !== '' && <Text color="suggestion">{branch}</Text>}
+          {model !== '' && <Text dimColor>{model}</Text>}
+          <Text dimColor>{`${title === '' ? '' : ' '}${'─'.repeat(Math.max(0, e.props.bodyColumns - 1 - (title === '' ? 0 : title.length + 4)))}`}</Text>
+        </Text>
         <Box>
           <Text bold>{'Context'.padEnd(LABEL)}</Text>
           {snap.segments.map((s, i) => {
@@ -243,7 +248,7 @@ export const register: Register = on => {
           </Text>
         </Box>
         <Text wrap="truncate">
-          {' '.repeat(LABEL)}
+          {branchOff(!isLarge)}
           {used.map(s => (
             <Text key={s.name}>
               <Text color={s.color}>■</Text>
@@ -252,8 +257,9 @@ export const register: Register = on => {
           ))}
         </Text>
         {isLarge && (
-          <Text color={usageColor(75)} wrap="truncate-end">
-            {`${' '.repeat(LABEL)}Context above ${kTokens(COMPACT_AT)}: run /compact to free space`}
+          <Text wrap="truncate-end">
+            {branchOff(true)}
+            <Text color={usageColor(75)}>{`Context above ${kTokens(COMPACT_AT)}: run /compact to free space`}</Text>
           </Text>
         )}
         {limitRows.map(row => (

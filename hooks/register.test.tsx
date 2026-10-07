@@ -208,13 +208,14 @@ test('a category of a kind the bar does not know is left out', async ($, on) => 
   expect(texts(tree).filter(t => (t.props as { color?: string } | undefined)?.color === 'x')).toEqual([])
 })
 
-test('shows the folder, branch and model on one row', async ($, on) => {
+test('titles the separator rule with the folder, branch and model, across the width', async ($, on) => {
   fakes(on, {
     git: { 'git branch --show-current': { exitCode: 0, stdout: 'feature/301-thing\n' } },
     place: { cwd: '/Users/me/Code/app', home: '/Users/me', model: 'Opus 5.5 (1M context)' },
   })
-  const text = plain((await (await mount($)).drawn()) as Node)
-  expect(text).toContain('~/Code/app  ⎇ feature/301-thing  Opus 5.5 (1M context)')
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/^── ~\/Code\/app {2}⎇ feature\/301-thing {2}Opus 5\.5 \(1M context\) ─+$/)
+  expect(rule?.length).toBe(BAND.bodyColumns - 1)
 })
 
 test('a detached HEAD shows its short sha', async ($, on) => {
@@ -234,10 +235,9 @@ test('outside a git repository the row keeps the folder and model', async ($, on
   expect(text).not.toContain('⎇')
 })
 
-test('with nothing to show there is no row', async ($, on) => {
-  const text = JSON.stringify(await drawn($, on))
-  expect(text).toContain('Context')
-  expect(text).not.toContain('⎇')
+test('with nothing to show the rule has no title', async ($, on) => {
+  const [rule] = lines(await drawn($, on))
+  expect(rule).toBe('─'.repeat(BAND.bodyColumns - 1))
 })
 
 test('a prompt picks up a branch, folder or model changed outside the turn', async ($, on) => {
@@ -428,16 +428,28 @@ const contextDrawing = async ($: Dollar, on: On, totalTokens: number) => {
   return { text: plain(tree), tail: texts(tree).find(t => /^ \d+% .+\/.+$/.test(t.text)) }
 }
 
+/** The lines hanging from the context bar, up to the limits. */
+const hanging = async ($: Dollar, on: On, totalTokens: number) =>
+  lines(await drawn($, on, atContext(totalTokens))).filter(l => /^ {6}[├└] /.test(l)).map(l => l.slice(0, 10))
+
 test('below 250k the context numbers stay dim and nothing suggests /compact', async ($, on) => {
   const { text, tail } = await contextDrawing($, on, 249_999)
   expect(tail?.props).toEqual({ dimColor: true, wrap: 'truncate-end' })
   expect(text).not.toContain('/compact')
 })
 
+test('the legend hangs from the context bar', async ($, on) => {
+  expect(await hanging($, on, 60_000)).toEqual(['      └ ■ '])
+})
+
 test('from 250k the context numbers turn orange and /compact is suggested', async ($, on) => {
   const { text, tail } = await contextDrawing($, on, 250_000)
   expect(tail?.props).toEqual({ color: usageColor(75), wrap: 'truncate-end' })
   expect(text).toContain('run /compact')
+})
+
+test('the /compact hint closes the group under the legend', async ($, on) => {
+  expect(await hanging($, on, 250_000)).toEqual(['      ├ ■ ', '      └ Co'])
 })
 
 test('hiding is written to the store', async ($, on) => {
