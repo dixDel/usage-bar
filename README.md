@@ -17,9 +17,9 @@ Context ███░░░░░░░▒ 26% 260k/1.0M
 - **Context**: the context window by category, with free space and the autocompact buffer, the legend
   hanging from it. From 250k tokens the figures turn orange and a hint under the legend suggests
   `/compact`.
-- **5h / 7d**: rate-limit usage, coloured green to red by level, 7d faded, side by side on one row. The
-  figure turns yellow at 50%, orange at 75%, red at 90%. Resets are in local time. A terminal too narrow
-  for two bars draws each on its own row.
+- **5h / 7d**: rate-limit usage, coloured green to red by level in muted tones, side by side on one
+  row. The figure turns yellow at 50%, orange at 75%, red at 90%. Resets are in local time. A terminal
+  too narrow for two bars draws each on its own row.
 
 Every bar has the same width, set by the terminal width alone, never by the figures. `/usage-bar` hides or shows the band; the
 choice is kept across sessions.
