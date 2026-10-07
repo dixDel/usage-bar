@@ -254,12 +254,26 @@ const refreshAddresses = async ($: EngineInterface) => {
   }
 }
 
+// East Asian wide and fullwidth blocks: Hangul Jamo, CJK and Yi, Hangul, compatibility, fullwidth forms, the supplementary ideographs.
+const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3fffd}]/u
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/** The columns a terminal gives `text`: two for a wide character or an emoji, none for a lone combining mark. */
+export const cellWidth = (text: string): number => {
+  let width = 0
+  for (const { segment } of graphemes.segment(text)) {
+    if (/^\p{M}+$/u.test(segment)) continue
+    width += /\p{Emoji_Presentation}|\p{Extended_Pictographic}️/u.test(segment) || WIDE.test(segment) ? 2 : 1
+  }
+  return width
+}
+
 /**
  * The separator's title and its right end, the addresses, each part a string to colour. The dashes give
  * way first; then the addresses, public alone before none; then the title is cut from its end.
  */
 export const ruleParts = (title: string, local: string | undefined, pub: string | undefined, columns: number) => {
-  const left = title === '' ? 0 : title.length + 4 // "── " title " "
+  const left = title === '' ? 0 : cellWidth(title) + 4 // "── " title " "
   for (const right of [[local, pub], [pub], []].map(a => a.filter((x): x is string => x !== undefined).join(' → '))) {
     const fill = columns - 1 - left - (right === '' ? 0 : right.length + 4) // " " right " ──"
     if (fill >= 1 || right === '') return { fill: Math.max(0, fill), right }

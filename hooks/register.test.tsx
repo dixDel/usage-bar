@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cells, isIp, printable, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
+import { cells, cellWidth, isIp, printable, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
 
 const USAGE = {
   startedAt: 0,
@@ -44,6 +44,21 @@ describe('ruleParts', () => {
   test('an address that cannot be read is left out', () => {
     expect(ruleParts(TITLE, '10.0.0.2', undefined, 60).right).toBe('10.0.0.2')
     expect(ruleParts(TITLE, undefined, undefined, 60)).toEqual({ fill: 59 - 17, right: '' })
+  })
+  test('counts a wide character as the two columns it takes', () => {
+    // "~/日本" takes 6 columns, so 10 for "── " title " ", 15 for " " public " ──"
+    expect(ruleParts('~/日本', undefined, '203.0.113.7', 40)).toEqual({ fill: 39 - 10 - 15, right: '203.0.113.7' })
+  })
+})
+
+describe('cellWidth', () => {
+  test('counts the columns a terminal gives each character', () => {
+    expect(cellWidth('abc ⎇ é')).toBe(7)
+    expect(cellWidth('日本')).toBe(4)
+    expect(cellWidth('ｱ한')).toBe(3) // half-width katakana, Hangul
+    expect(cellWidth('🚀')).toBe(2)
+    expect(cellWidth('é')).toBe(1) // a combining accent takes none
+    expect(cellWidth('👩‍💻')).toBe(2) // one emoji joined from two
   })
 })
 
