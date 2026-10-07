@@ -6,6 +6,7 @@ import type { Limit, Segment, Snapshot } from '../types'
 const snapshot = atom({ plugin: 'usage-bar', key: 'snapshot' } as const, null)
 const isVisible = atom({ plugin: 'usage-bar', key: 'isVisible' } as const, true)
 const addresses = atom({ plugin: 'usage-bar', key: 'addresses' } as const, {})
+const lookupSince = atom({ plugin: 'usage-bar', key: 'lookupSince' } as const, 0)
 
 // The /usage-bar choice, kept across sessions.
 const STORE_KEY = 'isVisible'
@@ -173,6 +174,8 @@ const refreshPlace = async ($: EngineInterface) => {
 const PUBLIC_IP_URL = 'https://api.ipify.org'
 /** How long a lookup may take before the address is left out. */
 const LOOKUP_MS = 3000
+/** Longer than a lookup can take: up to six commands in turn, each held to LOOKUP_MS, the fetch alongside. */
+const LOOKUP_STALE_MS = 30_000
 /** How often the addresses are asked again, so a VPN or network switched while idle shows. */
 const ADDRESSES_EVERY_MS = 60_000
 const isIpv4 = (s: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s) && s.split('.').every(n => Number(n) <= 255)
@@ -232,11 +235,23 @@ const publicIp = async ($: EngineInterface): Promise<string | undefined> => {
   return ip !== undefined && isIp(ip) ? ip : undefined
 }
 
-/** Both addresses, asked apart from the measurement so a slow network never holds the band. */
+/**
+ * Both addresses, asked apart from the measurement so a slow network never holds the band. A call made
+ * while a lookup is under way is dropped, so lookups never pile up or land out of order. A claim older
+ * than any lookup can take, left by a reload mid-lookup, is stale and taken over.
+ */
 const refreshAddresses = async ($: EngineInterface) => {
   if (!(await read($, isVisible))) return
-  const [local, pub] = await Promise.all([localIp($), publicIp($)])
-  await update($, addresses, () => ({ local, public: pub }))
+  const now = Date.now()
+  let isClaimed = false
+  await update($, lookupSince, since => ((isClaimed = now - since > LOOKUP_STALE_MS), isClaimed ? now : since))
+  if (!isClaimed) return
+  try {
+    const [local, pub] = await Promise.all([localIp($), publicIp($)])
+    await update($, addresses, () => ({ local, public: pub }))
+  } finally {
+    await update($, lookupSince, since => (since === now ? 0 : since))
+  }
 }
 
 /**

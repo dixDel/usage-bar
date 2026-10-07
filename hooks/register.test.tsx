@@ -319,6 +319,16 @@ test('on Linux the local address is the default route’s source, not a containe
   expect(rule).toMatch(/ 192\.168\.1\.40 ──$/)
 })
 
+test('prompts in quick succession share one address lookup', async ($, on) => {
+  const f = fakes(on, { place: { cwd: '/a' } })
+  on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+  await mount($)
+  f.calls.length = 0
+  await Promise.all([$.prompt.submit({ text: 'a' } as never), $.prompt.submit({ text: 'b' } as never)])
+  await new Promise(done => setTimeout(done, 50))
+  expect(f.calls.filter(c => c === 'route -n get default').length).toBe(1)
+})
+
 test('offline, or with an answer that is not an address, the rule shows none', async ($, on) => {
   fakes(on, { git: { 'hostname -I': { exitCode: 0, stdout: 'garbage\n' } }, place: { cwd: '/a' } })
   const [rule] = lines((await (await mount($)).drawn()) as Node)

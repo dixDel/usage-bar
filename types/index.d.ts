@@ -20,6 +20,6 @@ export type Addresses = { local?: string; public?: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'usage-bar': { snapshot: Snapshot | null; isVisible: boolean; addresses: Addresses }
+    'usage-bar': { snapshot: Snapshot | null; isVisible: boolean; addresses: Addresses; lookupSince: number }
   }
 }
