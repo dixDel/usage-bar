@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cells, tildePath, usageColor, usageNumberColor } from './register'
+import { cells, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
 
 const USAGE = {
   startedAt: 0,
@@ -28,6 +28,24 @@ const USAGE = {
 }
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 }
+
+describe('ruleParts', () => {
+  const TITLE = '~/app  ⎇ main' // 13 columns
+  test('the dashes give way first, the addresses keeping the right end', () => {
+    // 17 columns for "── " title " ", 26 for " " both " ──"
+    expect(ruleParts(TITLE, '10.0.0.2', '203.0.113.7', 60)).toEqual({ fill: 59 - 17 - 26, right: '10.0.0.2 → 203.0.113.7' })
+    expect(ruleParts(TITLE, '10.0.0.2', '203.0.113.7', 45)).toEqual({ fill: 1, right: '10.0.0.2 → 203.0.113.7' })
+  })
+  test('then the local address goes, then both, before the title is cut', () => {
+    expect(ruleParts(TITLE, '10.0.0.2', '203.0.113.7', 44)).toEqual({ fill: 43 - 17 - 15, right: '203.0.113.7' })
+    expect(ruleParts(TITLE, '10.0.0.2', '203.0.113.7', 33)).toEqual({ fill: 32 - 17, right: '' })
+    expect(ruleParts(TITLE, '10.0.0.2', '203.0.113.7', 10)).toEqual({ fill: 0, right: '' })
+  })
+  test('an address that cannot be read is left out', () => {
+    expect(ruleParts(TITLE, '10.0.0.2', undefined, 60).right).toBe('10.0.0.2')
+    expect(ruleParts(TITLE, undefined, undefined, 60)).toEqual({ fill: 59 - 17, right: '' })
+  })
+})
 
 describe('cells', () => {
   test('fills the bar exactly', () => {
@@ -107,7 +125,7 @@ type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 type Git = Record<string, { exitCode: number; stdout: string }>
 type Node = { type?: string; props?: object; children?: (Node | string)[] }
 
-type Place = { cwd?: string; home?: string; model?: string }
+type Place = { cwd?: string; home?: string; model?: string; publicIp?: string }
 
 /**
  * Fakes the store, git, the usage figures, the folder and model, and the engine's own band. `calls` logs
@@ -129,6 +147,12 @@ const fakes = (on: On, init: { usage?: unknown; git?: Git; store?: Record<string
   on('store.get', (_$, e) => ({ value: f.store.get(e.key) }) as never)
   on('store.set', (_$, e) => (f.store.set(e.key, e.value), { value: undefined }) as never)
   on('session.usage', () => (f.calls.push('usage'), { value: f.usage }) as never)
+  // The lookup timeout: long enough that a faked answer always wins.
+  on('clock.sleep', () => new Promise(done => setTimeout(() => done({ value: undefined }), 1000)) as never)
+  on('http.fetch', () => {
+    const ip = f.place.publicIp
+    return { value: { status: ip === undefined ? 503 : 200, ok: ip !== undefined, headers: {}, text: ip ?? 'down' } } as never
+  })
   on('process.run', (_$, e) => {
     const argv = e.argv.join(' ')
     f.calls.push(argv)
@@ -233,6 +257,22 @@ test('outside a git repository the row keeps the folder and model', async ($, on
   const text = plain((await (await mount($)).drawn()) as Node)
   expect(text).toContain('/tmp/x  Sonnet 5.5')
   expect(text).not.toContain('⎇')
+})
+
+test('the local and public addresses end the rule, at the full width', async ($, on) => {
+  fakes(on, {
+    git: { 'ipconfig getifaddr en0': { exitCode: 0, stdout: '192.168.1.23\n' } },
+    place: { cwd: '/a', publicIp: '203.0.113.7\n' },
+  })
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/^── \/a ─+ 192\.168\.1\.23 → 203\.0\.113\.7 ──$/)
+  expect(rule?.length).toBe(BAND.bodyColumns - 1)
+})
+
+test('offline, or with an answer that is not an address, the rule shows none', async ($, on) => {
+  fakes(on, { git: { 'hostname -I': { exitCode: 0, stdout: 'garbage\n' } }, place: { cwd: '/a' } })
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/^── \/a ─+$/)
 })
 
 test('with nothing to show the rule has no title', async ($, on) => {

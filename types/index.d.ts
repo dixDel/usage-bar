@@ -15,8 +15,11 @@ export type Snapshot = {
   model?: string
 }
 
+/** The machine's addresses, each absent until read or when it cannot be. */
+export type Addresses = { local?: string; public?: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    'usage-bar': { snapshot: Snapshot | null; isVisible: boolean }
+    'usage-bar': { snapshot: Snapshot | null; isVisible: boolean; addresses: Addresses }
   }
 }

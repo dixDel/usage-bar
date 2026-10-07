@@ -5,6 +5,7 @@ import type { Limit, Segment, Snapshot } from '../types'
 
 const snapshot = atom({ plugin: 'usage-bar', key: 'snapshot' } as const, null)
 const isVisible = atom({ plugin: 'usage-bar', key: 'isVisible' } as const, true)
+const addresses = atom({ plugin: 'usage-bar', key: 'addresses' } as const, {})
 
 // The /usage-bar choice, kept across sessions.
 const STORE_KEY = 'isVisible'
@@ -164,6 +165,55 @@ const refreshPlace = async ($: EngineInterface) => {
   await update($, snapshot, s => (s === null ? s : { ...s, ...where }))
 }
 
+/** Where the public address is asked, as plain text. */
+const PUBLIC_IP_URL = 'https://api.ipify.org'
+/** How long a lookup may take before the address is left out. */
+const LOOKUP_MS = 3000
+/** How often the addresses are asked again, so a VPN or network switched while idle shows. */
+const ADDRESSES_EVERY_MS = 60_000
+// Dotted IPv4 or colon-separated IPv6, nothing else, so an error page is never drawn.
+const IP = /^(\d{1,3}(\.\d{1,3}){3}|[\da-f:]*:[\da-f:.]+)$/i
+
+/** The machine's address on its network: macOS Wi-Fi, then Ethernet, then Linux; undefined when none answers. */
+const localIp = async ($: EngineInterface): Promise<string | undefined> => {
+  for (const argv of [['ipconfig', 'getifaddr', 'en0'], ['ipconfig', 'getifaddr', 'en1'], ['hostname', '-I']]) {
+    const run = await $.process.run(argv, { timeoutMs: LOOKUP_MS }).catch(() => undefined)
+    const ip = run?.exitCode === 0 ? run.stdout.trim().split(/\s+/)[0] : undefined
+    if (ip !== undefined && IP.test(ip)) return ip
+  }
+  return undefined
+}
+
+/** The address the internet sees, through the host; undefined offline, refused or past the timeout. */
+const publicIp = async ($: EngineInterface): Promise<string | undefined> => {
+  const answer = await Promise.race([
+    $.http.fetch(PUBLIC_IP_URL).catch(() => undefined),
+    $.clock.sleep(LOOKUP_MS).then(() => undefined, () => undefined),
+  ])
+  const ip = answer?.ok ? answer.text.trim() : undefined
+  return ip !== undefined && IP.test(ip) ? ip : undefined
+}
+
+/** Both addresses, asked apart from the measurement so a slow network never holds the band. */
+const refreshAddresses = async ($: EngineInterface) => {
+  if (!(await read($, isVisible))) return
+  const [local, pub] = await Promise.all([localIp($), publicIp($)])
+  await update($, addresses, () => ({ local, public: pub }))
+}
+
+/**
+ * The separator's title and its right end, the addresses, each part a string to colour. The dashes give
+ * way first; then the addresses, public alone before none; then the title is cut from its end.
+ */
+export const ruleParts = (title: string, local: string | undefined, pub: string | undefined, columns: number) => {
+  const left = title === '' ? 0 : title.length + 4 // "── " title " "
+  for (const right of [[local, pub], [pub], []].map(a => a.filter((x): x is string => x !== undefined).join(' → '))) {
+    const fill = columns - 1 - left - (right === '' ? 0 : right.length + 4) // " " right " ──"
+    if (fill >= 1 || right === '') return { fill: Math.max(0, fill), right }
+  }
+  return { fill: 0, right: '' }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -171,6 +221,8 @@ export const register: Register = on => {
     const stored = await $.store.get(STORE_KEY)
     if (typeof stored === 'boolean') await update($, isVisible, () => stored)
     if (await read($, isVisible)) await measure($).catch(() => undefined)
+    void refreshAddresses($).catch(() => undefined)
+    $.clock.every(ADDRESSES_EVERY_MS, () => void refreshAddresses($).catch(() => undefined))
     return started
   })
 
@@ -187,18 +239,20 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     if (await read($, isVisible)) await refreshPlace($).catch(() => undefined)
+    void refreshAddresses($).catch(() => undefined)
     return result
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'usage-bar' }, async $ => {
     const now = await update($, isVisible, v => !v)
     await $.store.set(STORE_KEY, now)
-    if (now) await measure($).catch(() => undefined)
+    if (now) await Promise.all([measure($), refreshAddresses($)]).catch(() => undefined)
     return { text: now ? 'Usage bar shown.' : 'Usage bar hidden.' }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const snap = await read($, snapshot)
+    const ips = await read($, addresses)
     if (e.props.hasSurvey || snap === null || !(await read($, isVisible))) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
@@ -216,19 +270,22 @@ export const register: Register = on => {
     const branch = snap.branch === undefined ? '' : `${folder !== '' ? '  ' : ''}⎇ ${snap.branch}`
     const model = snap.model === undefined ? '' : `${folder !== '' || branch !== '' ? '  ' : ''}${snap.model}`
     const title = folder + branch + model
+    const rule = ruleParts(title, ips.local, ips.public, e.props.bodyColumns)
     // The lines under the context bar hang from it, the last one closing the group.
     const branchOff = (isLast: boolean) => <Text dimColor>{`${isLast ? '└' : '├'} `.padStart(LABEL)}</Text>
 
     return (
       <Box flexDirection="column">
-        {/* The separator from the chat, titled with the folder, branch and model: narrowing the terminal
-            shortens the rule first, then cuts the model. */}
+        {/* The separator from the chat, titled with the folder, branch and model, the addresses at its right end. */}
         <Text wrap="truncate-end">
           <Text dimColor>{title === '' ? '' : '── '}</Text>
           {folder !== '' && <Text bold>{folder}</Text>}
           {branch !== '' && <Text color="suggestion">{branch}</Text>}
           {model !== '' && <Text dimColor>{model}</Text>}
-          <Text dimColor>{`${title === '' ? '' : ' '}${'─'.repeat(Math.max(0, e.props.bodyColumns - 1 - (title === '' ? 0 : title.length + 4)))}`}</Text>
+          <Text dimColor>{`${title === '' ? '' : ' '}${'─'.repeat(rule.fill)}`}</Text>
+          {rule.right !== '' && <Text dimColor>{' '}</Text>}
+          {rule.right !== '' && <Text>{rule.right}</Text>}
+          {rule.right !== '' && <Text dimColor>{' ──'}</Text>}
         </Text>
         <Box>
           <Text bold>{'Context'.padEnd(LABEL)}</Text>
