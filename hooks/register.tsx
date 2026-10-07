@@ -193,11 +193,30 @@ export const isIp = (s: string): boolean => {
   return halves.length === 2 ? count <= 7 : count === 8
 }
 
-/** The machine's address on its network: macOS Wi-Fi, then Ethernet, then Linux; undefined when none answers. */
+/** A command's output, undefined when it fails or cannot run. */
+const output = async ($: EngineInterface, argv: string[]): Promise<string | undefined> => {
+  const run = await $.process.run(argv, { timeoutMs: LOOKUP_MS }).catch(() => undefined)
+  return run?.exitCode === 0 ? run.stdout : undefined
+}
+
+/**
+ * The machine's address on its network, where its default route leaves: on macOS that route's interface,
+ * on Linux its source (never a container bridge); then Wi-Fi, Ethernet and the first address as a last
+ * resort. Undefined when none answers. Asking the route sends nothing.
+ */
 const localIp = async ($: EngineInterface): Promise<string | undefined> => {
-  for (const argv of [['ipconfig', 'getifaddr', 'en0'], ['ipconfig', 'getifaddr', 'en1'], ['hostname', '-I']]) {
-    const run = await $.process.run(argv, { timeoutMs: LOOKUP_MS }).catch(() => undefined)
-    const ip = run?.exitCode === 0 ? run.stdout.trim().split(/\s+/)[0] : undefined
+  const routes: (() => Promise<string | undefined>)[] = [
+    async () => {
+      const ifname = (await output($, ['route', '-n', 'get', 'default']))?.match(/interface:\s*(\S+)/)?.[1]
+      return ifname === undefined ? undefined : (await output($, ['ipconfig', 'getifaddr', ifname]))?.trim()
+    },
+    async () => (await output($, ['ip', 'route', 'get', '1.1.1.1']))?.match(/\bsrc\s+(\S+)/)?.[1],
+    ...[['ipconfig', 'getifaddr', 'en0'], ['ipconfig', 'getifaddr', 'en1'], ['hostname', '-I']].map(
+      argv => async () => (await output($, argv))?.trim().split(/\s+/)[0],
+    ),
+  ]
+  for (const route of routes) {
+    const ip = await route()
     if (ip !== undefined && isIp(ip)) return ip
   }
   return undefined

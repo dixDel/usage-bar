@@ -295,6 +295,30 @@ test('the local and public addresses end the rule, at the full width', async ($,
   expect(rule?.length).toBe(BAND.bodyColumns - 1)
 })
 
+test('on macOS the local address is the default route’s interface, not only Wi-Fi', async ($, on) => {
+  fakes(on, {
+    git: {
+      'route -n get default': { exitCode: 0, stdout: '   route to: default\n    gateway: 192.168.1.1\n  interface: en5\n      flags: <UP,GATEWAY,DONE>\n' },
+      'ipconfig getifaddr en5': { exitCode: 0, stdout: '10.1.2.3\n' },
+    },
+    place: { cwd: '/a' },
+  })
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/ 10\.1\.2\.3 ──$/)
+})
+
+test('on Linux the local address is the default route’s source, not a container bridge', async ($, on) => {
+  fakes(on, {
+    git: {
+      'ip route get 1.1.1.1': { exitCode: 0, stdout: '1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.40 uid 1000 \n    cache \n' },
+      'hostname -I': { exitCode: 0, stdout: '172.17.0.1 192.168.1.40 \n' },
+    },
+    place: { cwd: '/a' },
+  })
+  const [rule] = lines((await (await mount($)).drawn()) as Node)
+  expect(rule).toMatch(/ 192\.168\.1\.40 ──$/)
+})
+
 test('offline, or with an answer that is not an address, the rule shows none', async ($, on) => {
   fakes(on, { git: { 'hostname -I': { exitCode: 0, stdout: 'garbage\n' } }, place: { cwd: '/a' } })
   const [rule] = lines((await (await mount($)).drawn()) as Node)
