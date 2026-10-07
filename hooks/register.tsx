@@ -175,15 +175,30 @@ const PUBLIC_IP_URL = 'https://api.ipify.org'
 const LOOKUP_MS = 3000
 /** How often the addresses are asked again, so a VPN or network switched while idle shows. */
 const ADDRESSES_EVERY_MS = 60_000
-// Dotted IPv4 or colon-separated IPv6, nothing else, so an error page is never drawn.
-const IP = /^(\d{1,3}(\.\d{1,3}){3}|[\da-f:]*:[\da-f:.]+)$/i
+const isIpv4 = (s: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s) && s.split('.').every(n => Number(n) <= 255)
+
+/** A dotted IPv4 or an IPv6 address, nothing else, so an error page is never drawn. */
+export const isIp = (s: string): boolean => {
+  if (isIpv4(s)) return true
+  const halves = s.split('::')
+  if (halves.length > 2) return false
+  // Groups of one to four hex digits, the last of them maybe an embedded IPv4 counting for two.
+  const groups = halves.map(h => (h === '' ? [] : h.split(':')))
+  const all = groups.flat()
+  const last = all.at(-1)
+  const v4 = last !== undefined && last.includes('.') ? 1 : 0
+  if (v4 === 1 && !isIpv4(last ?? '')) return false
+  if (!all.slice(0, all.length - v4).every(g => /^[\da-f]{1,4}$/i.test(g))) return false
+  const count = all.length + v4
+  return halves.length === 2 ? count <= 7 : count === 8
+}
 
 /** The machine's address on its network: macOS Wi-Fi, then Ethernet, then Linux; undefined when none answers. */
 const localIp = async ($: EngineInterface): Promise<string | undefined> => {
   for (const argv of [['ipconfig', 'getifaddr', 'en0'], ['ipconfig', 'getifaddr', 'en1'], ['hostname', '-I']]) {
     const run = await $.process.run(argv, { timeoutMs: LOOKUP_MS }).catch(() => undefined)
     const ip = run?.exitCode === 0 ? run.stdout.trim().split(/\s+/)[0] : undefined
-    if (ip !== undefined && IP.test(ip)) return ip
+    if (ip !== undefined && isIp(ip)) return ip
   }
   return undefined
 }
@@ -195,7 +210,7 @@ const publicIp = async ($: EngineInterface): Promise<string | undefined> => {
     $.clock.sleep(LOOKUP_MS).then(() => undefined, () => undefined),
   ])
   const ip = answer?.ok ? answer.text.trim() : undefined
-  return ip !== undefined && IP.test(ip) ? ip : undefined
+  return ip !== undefined && isIp(ip) ? ip : undefined
 }
 
 /** Both addresses, asked apart from the measurement so a slow network never holds the band. */

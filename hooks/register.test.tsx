@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cells, printable, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
+import { cells, isIp, printable, ruleParts, tildePath, usageColor, usageNumberColor } from './register'
 
 const USAGE = {
   startedAt: 0,
@@ -44,6 +44,17 @@ describe('ruleParts', () => {
   test('an address that cannot be read is left out', () => {
     expect(ruleParts(TITLE, '10.0.0.2', undefined, 60).right).toBe('10.0.0.2')
     expect(ruleParts(TITLE, undefined, undefined, 60)).toEqual({ fill: 59 - 17, right: '' })
+  })
+})
+
+describe('isIp', () => {
+  test('takes dotted IPv4 and IPv6, compressed or embedding IPv4', () => {
+    for (const ip of ['192.168.1.23', '0.0.0.0', '255.255.255.255', '2001:db8::1', '::1', 'fe80::1:2:3:4', '2001:db8:0:0:0:0:0:1', '::ffff:192.0.2.1'])
+      expect(isIp(ip)).toBe(true)
+  })
+  test('refuses anything else', () => {
+    for (const s of ['256.1.1.1', '1.2.3', '1.2.3.4.5', '01.2.3.4x', '::::', 'dead:beef', '1::2::3', '12345::1', '1:2:3:4:5:6:7:8:9', ':1', 'garbage', ''])
+      expect(isIp(s)).toBe(false)
   })
 })
 
